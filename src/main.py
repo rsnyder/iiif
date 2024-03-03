@@ -121,7 +121,7 @@ if __name__ == '__main__':
   logger.setLevel(logging.INFO)
   parser = argparse.ArgumentParser(description='IIIF dev server')  
   parser.add_argument('--reload', type=bool, default=True, help='Reload on change')
-  parser.add_argument('--port', type=int, default=8080, help='HTTP port')
+  parser.add_argument('--port', type=int, default=8088, help='HTTP port')
   args = vars(parser.parse_args())
   
   uvicorn.run('main:app', port=args['port'], log_level='info', reload=args['reload'])

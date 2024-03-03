@@ -21,13 +21,14 @@ from time import time as now
 import traceback
 import yaml
 
-from gh import gh_repo_info, get_gh_file, gh_user_info
+import gh
+import wc
 
 from PIL import Image
 Image.MAX_IMAGE_PIXELS = 1000000000
 
 import pyvips
-logging.getLogger('pyvips').setLevel(logging.WARNING)
+logging.getLogger('pyvips').setLevel(logging.ERROR)
 
 import requests
 logging.getLogger('requests').setLevel(logging.WARNING)
@@ -49,12 +50,19 @@ def exists(key):
 
 def download_image(url, image_hash):
   start = now()
+  if 'raw.githubusercontent.com' in url and url.split('/')[-1].split('.')[-1].lower() not in ('jpg', 'jpeg', 'png', 'tif', 'tiff'):
+    acct, repo, ref, *path = url.split('/')[3:]
+    path[-1] = f'{path[-1]}.yaml'
+    logger.debug(f'get_gh_file: acct={acct} repo={repo} ref={ref} path={path}')
+    gh_metadata = yaml.load(gh.get_gh_file(acct, repo, ref, '/'.join(path)), Loader=yaml.FullLoader)
+    url = gh_metadata['image_url'] or url
   resp = requests.get(url, headers={'User-agent': 'IIIF service'})
-  path = None
   if resp.status_code == 200:
     path = f'/tmp/{image_hash}'
     with open(path, 'wb') as fp:
       fp.write(resp.content)
+  else:
+    logger.warning(f'download_image failed: url={url} code={resp.status_code} msg={resp.text}')
   logger.debug(f'download_image: url={url} image_hash={image_hash} elapsed={round(now()-start,3)}')
   return path
 
@@ -98,17 +106,27 @@ def image_info(image_hash, refresh=False):
       'height': img.height,
       'size': os.stat(path).st_size
     })
+    if 'exif' in info: return info
     _exif = exif_data(path)
     info.update({'exif': _exif})
+    logger.debug(json.dumps(_exif, indent=2, sort_keys=True))
     if 'datetime_original' in _exif:
       info['created'] = datetime.datetime.strptime(_exif['datetime_original'], '%Y:%m:%d %H:%M:%S').strftime('%Y-%m-%dT%H:%M:%SZ')
-      if 'gps_longitude' in _exif and 'gps_latitude' in _exif:
-        lat = round(_decimal_coords(_exif['gps_latitude'], _exif['gps_latitude_ref']), 6)
-        lon = round(_decimal_coords(_exif['gps_longitude'], _exif['gps_longitude_ref']), 6)
-        info['coords'] = f'{lat},{lon}'
-    s3.put_object(Bucket='mdpress-image-info', Key=s3_key, Body=json.dumps(info))
+    if 'gps_longitude' in _exif and 'gps_latitude' in _exif:
+      lat = round(_decimal_coords(_exif['gps_latitude'], _exif['gps_latitude_ref']), 6)
+      lon = round(_decimal_coords(_exif['gps_longitude'], _exif['gps_longitude_ref']), 6)
+      info['location'] = {'coords': [lat, lon]}
+    if 'make' in _exif and 'model' in _exif:
+      info['camera'] = f"{_exif['make']} {_exif['model']}"
+    if 'focal_length' in _exif and 'exposure_time' in _exif and 'f_number' in _exif and 'photographic_sensitivity' in _exif:
+      info['exposure'] = f"{_exif.get('focal_length_in_35mm_film', _exif.get('focal_length'))}mm 1/{round(1/_exif['exposure_time']) if _exif['exposure_time'] < 1 else _exif['exposure_time']}s f/{_exif['f_number']} ISO {_exif['photographic_sensitivity']}"
+    if 'exposure_mode' in _exif and 'exposure_program' in _exif:
+      info['mode'] = f"{_exif['exposure_mode']}, {_exif['exposure_program']}"
+    info['size'] = f"{info['width']} x {info['height']} {info['format'].split('/')[-1]}"
+    s3.put_object(Bucket='mdpress-image-info', Key=s3_key, Body=json.dumps(info, indent=2))
   except:
     logger.error(traceback.format_exc())
+  logger.debug(json.dumps(info, indent=2))
   return info
 
 def convert(image_hash, quality=50, refresh=False, **kwargs):
@@ -155,22 +173,26 @@ def get_image_data(**kwargs):
   return _image_info
 
 def make_manifest(manifestid, image_hash, image_info, image_metadata, baseurl='https://iiif.mdpress.io'):
+  lang = image_metadata.get('language', 'none')
   manifest = {
-    '@context': 'http://iiif.io/api/presentation/3/context.json',
+    '@context': [
+      'http://iiif.io/api/extension/navplace/context.json',
+      'http://iiif.io/api/presentation/3/context.json'
+    ],
     'id': f'{baseurl}/{manifestid}/manifest.json',
     'type': 'Manifest',
-    'label': { 'none': [ image_metadata['label'] ] },
+    'label': { image_metadata.get('language', lang): [ image_metadata['label'] ] },
     'items': [{
       'type': 'Canvas',
-      'id': f'{baseurl}/{manifestid}/canvas/p1',
+      'id': f'{baseurl}/{image_hash}/canvas/p1',
       'items': [{
         'type': 'AnnotationPage',
-        'id': f'{baseurl}/{manifestid}/p1/1',
+        'id': f'{baseurl}/{image_hash}/p1/1',
         'items': [{
           'type': 'Annotation',
-          'id': f'{baseurl}/{manifestid}/annotation/p0001-image',
+          'id': f'{baseurl}/{image_hash}/annotation/p0001-image',
           'motivation': 'painting',
-          'target': f'{baseurl}/{manifestid}/canvas/p1',
+          'target': f'{baseurl}/{image_hash}/canvas/p1',
           'body': {
             'id': image_info['url'],
             'type': 'Image',
@@ -191,59 +213,70 @@ def make_manifest(manifestid, image_hash, image_info, image_metadata, baseurl='h
       'width': image_info['width'],
       'height': image_info['height']
     }],
+    'rights': image_metadata['rights'],
     'thumbnail': [
       {
         'id': f'BASEURL ADDED BY ENDPOINT HANDLER/{image_hash}',
         'type': 'Image'
       }
     ],
+    'metadata': []
   }
-  if 'metadata' in image_metadata:
-    manifest['metadata'] = []
-    for md_item in image_metadata['metadata']:
-      for key, value in md_item.items():
-        manifest['metadata'].append({
-          'label': { 'none': [ key ] },
-          'value': { 'none': [ value ] }
-        })
-  if 'summary' in image_metadata:
-    manifest['summary'] = { 'none': [ image_metadata['summary'] ] }
+  if 'summary' in image_metadata: manifest['summary'] = { lang: [ image_metadata['summary'] ] }
+  if 'requiredStatement' in image_metadata: manifest['requiredStatement'] = image_metadata['requiredStatement']
+  if 'metadata' in image_metadata: manifest['metadata'] = image_metadata['metadata']
+  if 'created' in image_metadata or 'created' in image_info: manifest['navDate'] = image_metadata.get('created', image_info.get('created'))
+  if 'location' in image_metadata or 'location' in image_info:
+    location = image_metadata.get('location', image_info.get('location'))
+    manifest['navPlace'] = {
+      'id' : f'{baseurl}/{image_hash}/iiif/feature-collection/2',
+      'type' : 'FeatureCollection',
+      'features':[{
+        'id': f'{baseurl}/{image_hash}/iiif/feature/2',
+        'type': 'Feature',
+        'geometry': {
+          'type': 'Point',
+          'coordinates': location['coords']
+        }
+      }]
+    }
+    if location.get('label'): 
+      manifest['navPlace']['features'][0]['properties'] = {
+        'label': { lang: [ location['label'] ] },
+        'description': { lang: [ location['description'] ] },
+        'id': { lang: [ location['id'] ] }
+      }
+
+  for key in ('camera', 'exposure', 'mode', 'size'):   
+    if key in image_info:
+      manifest['metadata'].append({
+        'label': { 'en': [ key ] },
+        'value': { 'en': [ image_info[key] ] }
+      })
 
   return manifest
-
-def get_gh_image_metadata(manifestid):
-  start = now()
-  acct, repo, *path = manifestid[3:].split('/')
-  repo_info = gh_repo_info(acct, repo)
-  ref = repo_info['default_branch']
-  user_info = gh_user_info(repo_info['owner']['login'])
-  image_metadata = {
-    'label': 'label',
-    'metadata': [
-      { 'owner': user_info['name'] },
-      { 'owner_gh_url': user_info['html_url'] }
-    ]
-  }
-
-  path[-1] = '.'.join(path[-1].split('.')[:-1]) + '.yaml'
-  gh_metadata = yaml.load(get_gh_file(acct, repo, ref, '/'.join(path)) or '', Loader=yaml.FullLoader) or {}
-  image_metadata.update(gh_metadata)
-  logger.info(f'get_gh_image_metadata: manifestid={manifestid} elapsed={round(now()-start,3)}')
-  return image_metadata
   
 def generate(**kwargs):
   start = now()
+  metadata_fn = None
+  
   manifestid = kwargs.get('manifestid')
   if manifestid.startswith('gh:'):
-    acct, repo, *path = manifestid[3:].split('/')
-    url = f'https://raw.githubusercontent.com/{acct}/{repo}/main/{"/".join(path)}'
+    url = gh.manifestid_to_url(manifestid)
+    metadata_fn = gh.get_iiif_metadata
+  
+  elif manifestid.startswith('wc:'):
+    url = wc.manifestid_to_url(manifestid)
+    metadata_fn = wc.get_iiif_metadata
+    
+  if metadata_fn:
     image_hash = sha256(url.encode('utf-8')).hexdigest()
     kwargs['url'] = url
-  
+
     manifest_data = {}
     with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
       futures = {
-        executor.submit(get_gh_image_metadata, manifestid): 'metadata',
+        executor.submit(metadata_fn, manifestid): 'metadata',
         executor.submit(get_image_data, **kwargs): 'image-info'
       }
       
@@ -251,7 +284,8 @@ def generate(**kwargs):
         try:
           manifest_data[futures[future]] = future.result()
         except Exception as exc:
-          logger.debug(traceback.format_exc())
+          logger.error(traceback.format_exc())
+  
   logger.debug(json.dumps(manifest_data, indent=2))
   
   manifest = make_manifest(manifestid, image_hash, manifest_data['image-info'], manifest_data['metadata'])
