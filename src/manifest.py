@@ -247,8 +247,9 @@ def make_manifest(manifestid, image_hash, image_info, image_metadata, baseurl='h
         'id': { lang: [ location['id'] ] }
       }
 
+  existing_metadata_keys = [m['label'][lang][0] for m in manifest['metadata']]
   for key in ('camera', 'exposure', 'mode', 'size'):   
-    if key in image_info:
+    if key in image_info and key not in existing_metadata_keys:
       manifest['metadata'].append({
         'label': { 'en': [ key ] },
         'value': { 'en': [ image_info[key] ] }

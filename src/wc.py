@@ -203,12 +203,12 @@ def get_iiif_metadata(manifestid):
     make_qids = [item['mainsnak']['datavalue']['value']['id'] for item in entity_data['statements']['P4082']]
     make_labels = _get_entity_labels(make_qids, lang)
     make = '; '.join([make_labels[qid] for qid in make_qids])
-  focal_length =  int(entity_data['statements']['P2151'][0]['mainsnak']['datavalue']['value']['amount'].replace('+','').replace('-','')) if 'P2151' in entity_data['statements'] else None
+  focal_length =  int(float(entity_data['statements']['P2151'][0]['mainsnak']['datavalue']['value']['amount'].replace('+','').replace('-',''))) if 'P2151' in entity_data['statements'] else None
   exposure_time = float(entity_data['statements']['P6757'][0]['mainsnak']['datavalue']['value']['amount'].replace('+','').replace('-','')) if 'P6757' in entity_data['statements'] else None
   f_number = float(entity_data['statements']['P6790'][0]['mainsnak']['datavalue']['value']['amount'].replace('+','').replace('-','')) if 'P6790' in entity_data['statements'] else None
   iso = int(entity_data['statements']['P6789'][0]['mainsnak']['datavalue']['value']['amount'].replace('+','').replace('-','')) if 'P6789' in entity_data['statements'] else None
   
-  depicts = [item['mainsnak']['datavalue']['value']['id'] for item in entity_data['statements']['P180']]
+  depicts = [item['mainsnak']['datavalue']['value']['id'] for item in entity_data['statements']['P180']] if 'P180' in entity_data['statements'] else []
   if len(depicts) > 0:
     labels = _get_entity_labels(depicts, lang)
     depicts = [f'<a href="https://www.wikidata.org/entity/{qid}">{labels[qid]}</a>' for qid in depicts]
