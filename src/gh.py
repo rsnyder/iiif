@@ -24,7 +24,7 @@ def get_gh_file_by_url(url):
   resp = requests.get(url, headers={
     'Authorization': f'Token {GH_ACCESS_TOKEN}',
     'Accept': 'application/vnd.github.v3+json',
-    'User-agent': 'JSTOR Labs visual essays client'
+    'User-agent': 'MDPress client'
   })
   logger.debug(f'get_gh_file_by_url: url={url} resp={resp.status_code}')
   if resp.status_code == 200:
@@ -46,7 +46,7 @@ def get_gh_last_commit(acct, repo, ref, path=None):
   resp = requests.get(url, headers={
     'Authorization': f'Token {GH_ACCESS_TOKEN}',
     'Accept': 'application/vnd.github.v3+json',
-    'User-agent': 'JSTOR Labs visual essays client'
+    'User-agent': 'MDPress client'
   })
   commits = resp.json() if resp.status_code == 200 else []
   last_commit_date = datetime.datetime.strptime(commits[0]['commit']['author']['date'], '%Y-%m-%dT%H:%M:%SZ') if len(commits) > 0 else None
@@ -61,7 +61,7 @@ def gh_dir_list(acct, repo, path=None, ref=None):
   resp = requests.get(url, headers={
     'Authorization': f'Token {GH_ACCESS_TOKEN}',
     'Accept': 'application/vnd.github.v3+json',
-    'User-agent': 'JSTOR Labs visual essays client'
+    'User-agent': 'MDPress client'
   })
   # logger.info(json.dumps(resp.json(),indent=2))
   logger.debug(f'gh_dir_list: acct={acct} repo={repo} path={path} elapsed={round(now()-start,3)}')
@@ -73,7 +73,7 @@ def gh_repo_info(acct, repo):
   resp = requests.get(url, headers={
     'Authorization': f'Token {GH_ACCESS_TOKEN}',
     'Accept': 'application/vnd.github.v3+json',
-    'User-agent': 'JSTOR Labs visual essays client'
+    'User-agent': 'MDPress client'
   })
   repo_info = resp.json() if resp.status_code == 200 else {}
   logger.debug(json.dumps(repo_info, indent=2))
@@ -88,7 +88,7 @@ def gh_user_info(login=None, acct=None, repo=None):
   resp = requests.get(url, headers={
     'Authorization': f'Token {GH_ACCESS_TOKEN}',
     'Accept': 'application/vnd.github.v3+json',
-    'User-agent': 'JSTOR Labs visual essays client'
+    'User-agent': 'MDPress client'
   })
   user_info = resp.json() if resp.status_code == 200 else {}
   # logger.debug(json.dumps(user_info, indent=2))

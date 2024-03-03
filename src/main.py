@@ -27,6 +27,8 @@ from manifest import generate as get_manifest
 import requests
 logging.getLogger('requests').setLevel(logging.WARNING)
 
+from gh import gh_dir_list
+
 app = FastAPI(title='IIIF Presentation API', root_path='/')
 
 app.add_middleware(
@@ -85,7 +87,18 @@ async def manifest(manifestid: str, refresh: Optional[str] = None):
 @app.get('{manifestid:path}')
 async def image_viewer(manifestid: str):
   viewer_html = open(f'{SCRIPT_DIR}/index.html', 'r').read()
-  viewer_html = viewer_html.replace('src=""', f'src="{manifestid}"')
+  if manifestid.startswith('gh:'):
+    acct, repo, *path = manifestid[3:].split('/')
+    path = '/'.join(path)
+    if '.' not in path:
+      images_list_el = '<ul id="gh-images" style="display:none;">\n'
+      for img in [f'{manifestid}/{fname}' for fname in gh_dir_list(acct, repo, path) if fname.split('.')[-1] in ('jpg', 'jpeg', 'png', 'tif', 'tiff')]:
+        images_list_el += f'  <li>{img}</li>\n'
+      images_list_el += '</ul>'
+      viewer_html = viewer_html.replace('<mdp-', f'    {images_list_el}\n    <mdp-')
+      viewer_html = viewer_html.replace('src=""', 'data="gh-images"')
+  else:
+    viewer_html = viewer_html.replace('src=""', f'src="{manifestid}"')
   return Response(content=viewer_html, media_type='text/html')
   
 @app.get('/prezi2to3/')
