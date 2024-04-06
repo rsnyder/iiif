@@ -16,8 +16,10 @@ import exif
 import ffmpeg
 from hashlib import sha256
 import json
+import magic
 import os
 from time import time as now
+from urllib.parse import unquote
 import traceback
 import yaml
 
@@ -43,27 +45,45 @@ else:
     aws_secret_access_key=os.environ.get('AWS_SECRET_ACCESS_KEY')
   ).client('s3')
 
+cc_licenses = {
+  # Creative Commons Licenses
+  'PD': {'label': 'Public Domain', 'url': ''},
+  'PUBLIC DOMAIN': {'label': 'Public Domain', 'url': ''},
+  'PUBLIC-DOMAIN': {'label': 'Public Domain', 'url': ''},
+  'PDM': {'label': 'Public Domain Mark', 'url': ''},
+
+  'CC0': {'label': 'Public Domain Dedication', 'url': 'http://creativecommons.org/publicdomain/zero/1.0/'},
+  'CC-BY': {'label': 'Attribution', 'url': 'http://creativecommons.org/licenses/by/4.0/'},
+  'CC-BY-SA': {'label': 'Attribution-ShareAlike', 'url': 'http://creativecommons.org/licenses/by-sa/4.0/'},
+  'CC-BY-ND': {'label': 'Attribution-NoDerivs', 'url': 'http://creativecommons.org/licenses/by-nd/4.0/'},
+  'CC-BY-NC': {'label': 'Attribution-NonCommercial', 'url': 'http://creativecommons.org/licenses/by-nc/4.0/'},
+  'CC-BY-NC-SA': {'label': 'Attribution-NonCommercial', 'url': 'http://creativecommons.org/licenses/by-nc-sa/4.0/'},
+  'CC-BY-NC-ND': {'label': 'Attribution-NonCommercial-NoDerivs', 'url': 'http://creativecommons.org/licenses/by-nc-nd/4.0/'}
+}
+
 def exists(key):
   _exists = s3.list_objects_v2(Bucket=BUCKET_NAME, Prefix=key)['KeyCount'] > 0
   logger.debug(f'exists: bucket={BUCKET_NAME} key={key} exists={_exists}')
   return _exists
 
-def download_image(url, image_hash):
+def download(url, url_hash):
   start = now()
-  if 'raw.githubusercontent.com' in url and url.split('/')[-1].split('.')[-1].lower() not in ('jpg', 'jpeg', 'png', 'tif', 'tiff'):
+  extension = url.split('.')[-1].lower()
+  logger.debug(f'download: url={url} url_hash={url_hash} extension={extension}')
+  if 'raw.githubusercontent.com' in url and url.split('/')[-1].split('.')[-1].lower() not in ('gif', 'jpg', 'jpeg', 'mp3', 'mp4', 'ogg', 'ogv', 'png', 'tif', 'tiff', 'webm'):
     acct, repo, ref, *path = url.split('/')[3:]
-    path[-1] = f'{path[-1]}.yaml'
+    path[-1] = f'{path[-1].replace(".yaml","")}.yaml'
     logger.debug(f'get_gh_file: acct={acct} repo={repo} ref={ref} path={path}')
     gh_metadata = yaml.load(gh.get_gh_file(acct, repo, ref, '/'.join(path)), Loader=yaml.FullLoader)
-    url = gh_metadata['image_url'] or url
+    url = gh_metadata.get('image_url', url)
   resp = requests.get(url, headers={'User-agent': 'IIIF service'})
   if resp.status_code == 200:
-    path = f'/tmp/{image_hash}'
+    path = f'/tmp/{url_hash}'
     with open(path, 'wb') as fp:
       fp.write(resp.content)
   else:
-    logger.warning(f'download_image failed: url={url} code={resp.status_code} msg={resp.text}')
-  logger.debug(f'download_image: url={url} image_hash={image_hash} elapsed={round(now()-start,3)}')
+    logger.warning(f'download failed: url={url} code={resp.status_code} msg={resp.text}')
+  logger.debug(f'download: url={url} url_hash={url_hash} elapsed={round(now()-start,3)}')
   return path
 
 def _decimal_coords(coords, ref):
@@ -78,7 +98,7 @@ def exif_data(img):
     exifImg = exif.Image(img)
     for exif_key in sorted(exifImg.list_all()):
       if exif_key.startswith('_'): continue
-      if type(exifImg.get(exif_key)) in (int, float, str, bool) or exifImg.get(exif_key) is None:
+      if type(exifImg.get(exif_key)) in (int, float, str, bool) or exifImg.get(exif_key) is None or exif_key in ('orientation',):
         data[exif_key] = exifImg.get(exif_key)
       elif type(exifImg.get(exif_key)) == tuple:
         data[exif_key] = [val for val in exifImg.get(exif_key)]
@@ -87,20 +107,22 @@ def exif_data(img):
       else:
         data[exif_key] = str(exifImg.get(exif_key))    
   except:
-    logger.debug(traceback.format_exc())
+    logger.warning(traceback.format_exc())
+  logger.debug(json.dumps(data, indent=2))
   return data
 
 def av_info(path):
   return ffmpeg.probe(path)['streams'][0]
 
-def image_info(image_hash, refresh=False):
-  s3_key = f'{image_hash}.json'
+def image_info(url_hash, refresh=False):
+  s3_key = f'{url_hash}.json'
   info = json.loads(s3.get_object(Bucket='mdpress-image-info', Key=s3_key)['Body'].read()) if not refresh and exists(s3_key) else {}
   if info: return info
   try:
-    path = f'/tmp/{image_hash}'
+    path = f'/tmp/{url_hash}'
     img = Image.open(path)
     info.update({
+      'type': 'Image',
       'format': Image.MIME[img.format],
       'width': img.width,
       'height': img.height,
@@ -110,6 +132,8 @@ def image_info(image_hash, refresh=False):
     _exif = exif_data(path)
     info.update({'exif': _exif})
     logger.debug(json.dumps(_exif, indent=2, sort_keys=True))
+    if 'orientation' in _exif:
+      info['orientation'] = _exif['orientation']
     if 'datetime_original' in _exif:
       info['created'] = datetime.datetime.strptime(_exif['datetime_original'], '%Y:%m:%d %H:%M:%S').strftime('%Y-%m-%dT%H:%M:%SZ')
     if 'gps_longitude' in _exif and 'gps_latitude' in _exif:
@@ -129,16 +153,47 @@ def image_info(image_hash, refresh=False):
   logger.debug(json.dumps(info, indent=2))
   return info
 
-def convert(image_hash, quality=50, refresh=False, **kwargs):
+def hms_to_secs(time_str):
+    h, m, s = time_str.split(':')
+    return int(h) * 3600 + int(m) * 60 + int(float(s))
+  
+def media_info(path):
+  _media_info = {}
+  mime = magic.from_file(path, mime=True)
+  _type = mime.split('/')[0]
+  if _type in ('audio', 'video'):
+    _av_info = av_info(path)
+    if _av_info:
+      logger.debug(json.dumps(_av_info, indent=2))
+      if 'display_aspect_ratio' in _av_info:
+        wh = [int(v) for v in _av_info['display_aspect_ratio'].split(':')]
+        aspect = wh[0]/wh[1]
+        _av_info['width'] = round(_av_info['height'] * aspect)
+      _media_info = {
+        'type': _type.replace('audio', 'sound').capitalize(),
+        'format': mime,
+        'size': os.stat(path).st_size
+      }
+      for fld in ('duration', 'height', 'width'):
+        if fld in _av_info:
+          _media_info[fld] = _av_info[fld]
+      if 'tags' in _av_info and 'DURATION' in _av_info['tags']:
+        _media_info['duration'] = hms_to_secs(_av_info['tags']['DURATION'])
+        
+      if 'duration' in _media_info:
+        _media_info['duration'] = round(float(_media_info['duration']), 1)
+  return _media_info
+
+def convert(url_hash, quality=50, refresh=False, **kwargs):
   start = now()
-  dest = f'{image_hash}.tif'
+  dest = f'{url_hash}.tif'
   _exists = exists(dest)
-  logger.debug(f'convert: image_hash={image_hash} exists={_exists} refresh={refresh} quality={quality} elapsed={round(now()-start,3)}')
+  logger.debug(f'convert: url_hash={url_hash} exists={_exists} refresh={refresh} quality={quality} elapsed={round(now()-start,3)}')
   if _exists and not refresh:
     return
 
   try:
-    img = pyvips.Image.new_from_file(f'/tmp/{image_hash}')
+    img = pyvips.Image.new_from_file(f'/tmp/{url_hash}')
     img.tiffsave(
       f'/tmp/{dest}',
       tile=True,
@@ -151,88 +206,102 @@ def convert(image_hash, quality=50, refresh=False, **kwargs):
     save_to_s3(dest)
     os.remove(f'/tmp/{dest}')
   except Exception as e:
-    logger.error(f'convert: image_hash={image_hash} error={e}')
+    logger.error(f'convert: url_hash={url_hash} error={e}')
 
-def save_to_s3(image_hash):
-  logger.debug(f'save_to_s3: bucket={BUCKET_NAME} image_hash={image_hash}')
-  s3.upload_file(f'/tmp/{image_hash}', BUCKET_NAME, image_hash)
+def save_to_s3(url_hash):
+  logger.debug(f'save_to_s3: bucket={BUCKET_NAME} url_hash={url_hash}')
+  s3.upload_file(f'/tmp/{url_hash}', BUCKET_NAME, url_hash)
 
 def get_image_data(**kwargs):
   start = now()
   refresh = kwargs.get('refresh', False)
   url = kwargs['url']
-  image_hash = sha256(url.encode('utf-8')).hexdigest()
-  _image_info = json.loads(s3.get_object(Bucket='mdpress-image-info', Key=f'{image_hash}.json')['Body'].read()) if not refresh and exists(f'{image_hash}.json') else {}
-  if not _image_info:
-    download_image(url, image_hash)
-    convert(image_hash, **kwargs)
-    _image_info = image_info(image_hash, refresh)
-    os.remove(f'/tmp/{image_hash}')
-  _image_info['url'] = url
+  url_hash = sha256(url.encode('utf-8')).hexdigest()
+  
+  extension = url.split('.')[-1].lower()
+  _media_info = json.loads(s3.get_object(Bucket='mdpress-image-info', Key=f'{url_hash}.json')['Body'].read()) if not refresh and exists(f'{url_hash}.json') else {}
+  if not _media_info:
+    path = download(url, url_hash)
+    _type = 'av' if extension in ('mp3', 'mp4', 'webm', 'ogg', 'ogv') else 'image'
+    if _type == 'av':
+      _media_info = media_info(path)
+    else:
+      convert(url_hash, **kwargs)
+      _media_info = image_info(url_hash, refresh)
+      os.remove(f'/tmp/{url_hash}')
+  _media_info['url'] = url
   logger.info(f'get_image_data: url={url} elapsed={round(now()-start,3)}')
-  return _image_info
+  return _media_info
 
-def make_manifest(manifestid, image_hash, image_info, image_metadata, baseurl='https://iiif.mdpress.io'):
+def make_manifest(manifestid, url_hash, image_info, image_metadata, baseurl='https://iiif.mdpress.io'):
+  manifestid = manifestid or url_hash
   lang = image_metadata.get('language', 'none')
   manifest = {
     '@context': [
       'http://iiif.io/api/extension/navplace/context.json',
       'http://iiif.io/api/presentation/3/context.json'
     ],
-    'id': f'{baseurl}/{manifestid}/manifest.json',
+    'id': f'{baseurl}/{manifestid.replace(" ", "_")}/manifest.json',
     'type': 'Manifest',
     'label': { image_metadata.get('language', lang): [ image_metadata['label'] ] },
     'items': [{
       'type': 'Canvas',
-      'id': f'{baseurl}/{image_hash}/canvas/p1',
+      'id': f'{baseurl}/{url_hash}/canvas/p1',
       'items': [{
         'type': 'AnnotationPage',
-        'id': f'{baseurl}/{image_hash}/p1/1',
+        'id': f'{baseurl}/{url_hash}/p1/1',
         'items': [{
           'type': 'Annotation',
-          'id': f'{baseurl}/{image_hash}/annotation/p0001-image',
+          'id': f'{baseurl}/{url_hash}/annotation/p0001-image',
           'motivation': 'painting',
-          'target': f'{baseurl}/{image_hash}/canvas/p1',
+          'target': f'{baseurl}/{url_hash}/canvas/p1',
           'body': {
             'id': image_info['url'],
-            'type': 'Image',
-            'format': image_info['format'],
-            'width': image_info['width'],
-            'height': image_info['height'],
-            'service': [
-              {
-                'id': f'BASEURL ADDED BY ENDPOINT HANDLER/{image_hash}',
-                'profile': 'level2',
-                'type': 'ImageService3'
-              }
-            ]
+            'type': image_info['type'],
+            'format': image_info['format']
           }
         }]
       }],
-      'format': image_info['format'],
-      'width': image_info['width'],
-      'height': image_info['height']
+      'format': image_info['format']
     }],
-    'rights': image_metadata['rights'],
-    'thumbnail': [
-      {
-        'id': f'BASEURL ADDED BY ENDPOINT HANDLER/{image_hash}',
-        'type': 'Image'
-      }
-    ],
     'metadata': []
   }
+  
+  canvas = manifest['items'][0]
+  annotation = canvas['items'][0]['items'][0]
+  annotation_body = annotation['body']
+  _type = image_info.get('type').lower()
+  if _type in ('sound', 'video'):
+    canvas['duration'] = image_info['duration']
+    annotation_body['duration'] = image_info['duration']
+  if _type in ('image', 'video'):
+    canvas['width'] = image_info['width']
+    canvas['height'] = image_info['height']
+    annotation_body['width'] = image_info['width']
+    annotation_body['height'] = image_info['height']
+  if _type == 'image':
+    annotation_body['service'] = [{
+      'id': f'BASEURL ADDED BY ENDPOINT HANDLER/{url_hash}',
+      'profile': 'level2',
+      'type': 'ImageService3'
+    }]
+    manifest['thumbnail'] = [{
+      'id': f'BASEURL ADDED BY ENDPOINT HANDLER/{url_hash}',
+      'type': 'Image'
+    }]
+  
   if 'summary' in image_metadata: manifest['summary'] = { lang: [ image_metadata['summary'] ] }
+  if 'rights' in image_metadata: manifest['rights'] = image_metadata['rights']
   if 'requiredStatement' in image_metadata: manifest['requiredStatement'] = image_metadata['requiredStatement']
   if 'metadata' in image_metadata: manifest['metadata'] = image_metadata['metadata']
   if 'created' in image_metadata or 'created' in image_info: manifest['navDate'] = image_metadata.get('created', image_info.get('created'))
   if 'location' in image_metadata or 'location' in image_info:
     location = image_metadata.get('location', image_info.get('location'))
     manifest['navPlace'] = {
-      'id' : f'{baseurl}/{image_hash}/iiif/feature-collection/2',
+      'id' : f'{baseurl}/{url_hash}/iiif/feature-collection/2',
       'type' : 'FeatureCollection',
       'features':[{
-        'id': f'{baseurl}/{image_hash}/iiif/feature/2',
+        'id': f'{baseurl}/{url_hash}/iiif/feature/2',
         'type': 'Feature',
         'geometry': {
           'type': 'Point',
@@ -248,7 +317,7 @@ def make_manifest(manifestid, image_hash, image_info, image_metadata, baseurl='h
       }
 
   existing_metadata_keys = [m['label'][lang][0] for m in manifest['metadata']]
-  for key in ('camera', 'exposure', 'mode', 'size'):   
+  for key in ('camera', 'exposure', 'mode', 'orientation', 'size'):   
     if key in image_info and key not in existing_metadata_keys:
       manifest['metadata'].append({
         'label': { 'en': [ key ] },
@@ -256,13 +325,66 @@ def make_manifest(manifestid, image_hash, image_info, image_metadata, baseurl='h
       })
 
   return manifest
+
+def metadata_from_obj(**kwargs):
+  kwargs = dict([(k.lower(), v) for k,v in kwargs.items()])
+  url = kwargs.get('url')
+  lang = kwargs.get('language', 'none')
+  label = kwargs['label'] if 'label' in kwargs else kwargs['title'] if 'title' in kwargs else unquote(url.split('/')[-1].split('.')[0]).replace('_',' ')
+  summary = kwargs['summary'] if 'summary' in kwargs else kwargs['description'] if 'description' in kwargs else None
   
+  owner = kwargs['owner'] if 'owner' in kwargs else 'Unspecified'
+  
+  license_code = kwargs['license'].upper() if 'license' in kwargs else None
+  license_url = cc_licenses[license_code]['url'] if license_code in cc_licenses else None
+  license_label = cc_licenses[license_code]['label'] if license_code in cc_licenses else None
+  
+  metadata = {
+    'language': kwargs.get('language', kwargs.get('lang', 'none')),
+    'label': label,
+    'metadata': [
+      { 'label': { lang: [ 'title' ] }, 'value': { lang: [ label ] }},
+      { 'label': { lang: [ 'source' ] }, 'value': { lang: [ url ] } }
+    ]
+  }
+  if summary:
+    metadata['summary'] = summary
+
+  if license_url:
+    metadata['rights'] = license_url
+    
+  if owner:
+    metadata['metadata'].append({
+      'label': { lang: [ 'author' ] }, 
+      'value': { lang: [ owner ] }
+    })
+  
+  if 'attribution' in kwargs:
+    attribution_statement = kwargs['attribution']
+  elif owner and license_url and license_code not in ('PD', 'PUBLIC DOMAIN', 'PDM'):
+    attribution_statement = f'Image <em>{label}</em> provided by {owner} under a <a href="{license_url}">{license_label} ({license_code.replace("CC-", "CC ")})</a> license'
+  else:
+    attribution_statement = None
+
+  if attribution_statement:
+    metadata['requiredStatement'] = {
+      'label': { lang: [ 'attribution' ] },
+      'value': { lang: [ attribution_statement ] }
+    }
+  return metadata
+
 def generate(**kwargs):
   start = now()
   metadata_fn = None
   
   manifestid = kwargs.get('manifestid')
-  if manifestid.startswith('gh:'):
+  logger.info(f'generate: manifestid={manifestid}')
+  
+  if not manifestid: # create from object
+    url = kwargs.get('url')
+    metadata_fn = metadata_from_obj
+    
+  elif manifestid.startswith('gh:'):
     url = gh.manifestid_to_url(manifestid)
     metadata_fn = gh.get_iiif_metadata
   
@@ -271,13 +393,13 @@ def generate(**kwargs):
     metadata_fn = wc.get_iiif_metadata
     
   if metadata_fn:
-    image_hash = sha256(url.encode('utf-8')).hexdigest()
+    url_hash = sha256(url.encode('utf-8')).hexdigest()
     kwargs['url'] = url
 
     manifest_data = {}
     with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
       futures = {
-        executor.submit(metadata_fn, manifestid): 'metadata',
+        executor.submit(metadata_fn, **kwargs): 'metadata',
         executor.submit(get_image_data, **kwargs): 'image-info'
       }
       
@@ -289,7 +411,7 @@ def generate(**kwargs):
   
   logger.debug(json.dumps(manifest_data, indent=2))
   
-  manifest = make_manifest(manifestid, image_hash, manifest_data['image-info'], manifest_data['metadata'])
+  manifest = make_manifest(manifestid, url_hash, manifest_data['image-info'], manifest_data['metadata'])
   logger.info(f'generate: manifestid={manifestid} elapsed={round(now()-start,3)}')
   return manifest
 

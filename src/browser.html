@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MDPress IIIF Viewer</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@shoelace-style/shoelace@2.14.0/cdn/themes/light.css" />
+    <link href="https://fonts.googleapis.com/css?family=Roboto:100,300,400,500,700,900" rel="stylesheet">
+    <style>
+      main {
+        display: flex;
+        flex-direction: column;
+        height: calc(100dvh - 2em);
+        padding: 1em;
+        font-family: Roboto, sans-serif;
+      }
+      .dirs {
+        margin: 0.5em 0;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.5em;
+        align-items: center;
+      }
+      sl-breadcrumb-item:first-of-type::part(label) {
+        color: inherit;
+        cursor: unset;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <mdp-menu auth="github"></mdp-menu>
+      <div class="breadcrumbs"></div>
+      <div class="dirs"></div>
+      
+      <sl-tab-group>
+        <sl-tab slot="nav" panel="gallery">Gallery</sl-tab>
+        <sl-tab slot="nav" panel="map">Map</sl-tab>
+        <sl-tab-panel name="gallery"><mdp-gallery gh-dir=""></mdp-gallery></sl-tab-panel>
+        <sl-tab-panel name="map"><mdp-map gh-dir=""></mdp-map></sl-tab-panel>
+      </sl-tab-group>  
+    </main>
+
+    <script src="https://www.mdpress.io/v3/dist/js/index.js" type="module"></script>
+    <script type="module" src="https://cdn.jsdelivr.net/npm/@shoelace-style/shoelace@2.14.0/cdn/shoelace-autoloader.js"></script>
+  
+    <script>
+      let [owner_name, repository_name, ...path] = location.pathname.split(':').pop().split('/').filter(pe => pe)
+      window.config = { github: {owner_name, repository_name} }
+    </script>
+  </body>
+</html>

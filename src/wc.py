@@ -25,6 +25,7 @@ licenses = {
   # Creative Commons Licenses
   'PD': {'label': 'Public Domain', 'url': ''},
   'PUBLIC DOMAIN': {'label': 'Public Domain', 'url': ''},
+  'PUBLIC-DOMAIN': {'label': 'Public Domain', 'url': ''},
   'PDM': {'label': 'Public Domain Mark', 'url': ''},
 
   'CC0': {'label': 'Public Domain Dedication', 'url': 'http://creativecommons.org/publicdomain/zero/1.0/'},
@@ -125,7 +126,8 @@ def manifestid_to_url(manifestid):
   img_url = f'https://upload.wikimedia.org/wikipedia/commons/'
   return f'{img_url}{md5[:1]}/{md5[:2]}/{quote(title)}'
 
-def get_iiif_metadata(manifestid):
+def get_iiif_metadata(**kwargs):
+  manifestid = kwargs.get('manifestid')
   title = unquote(manifestid[3:]).replace(' ','_')
   start = now()
   
@@ -171,7 +173,8 @@ def get_iiif_metadata(manifestid):
   
   attribution_statement = f'Image <em>{label}</em> provided by {author} under a <a href="{license_url}">{license_label} ({license_code.replace("CC-", "CC ")})</a> license'
 
-  entity_data = props.get('wc_entity', {'labels': {}, 'descriptions': {}, 'statements': {}})
+  entity_data = props.get('wc_entity')
+  if not entity_data: entity_data = {'labels': {}, 'descriptions': {}, 'statements': {}}
   
   created = entity_data['statements']['P571'][0]['mainsnak']['datavalue']['value']['time'][1:] if 'P571' in entity_data['statements'] else None # inception
   

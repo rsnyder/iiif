@@ -16,13 +16,13 @@ import yaml
 import requests
 logging.getLogger('requests').setLevel(logging.INFO)
 
-GH_ACCESS_TOKEN = os.environ.get('GH_ACCESS_TOKEN')
+GH_UNSCOPED_TOKEN = os.environ.get('GH_UNSCOPED_TOKEN')
 
 def get_gh_file_by_url(url):
   start = now()
   content = sha = None
   resp = requests.get(url, headers={
-    'Authorization': f'Token {GH_ACCESS_TOKEN}',
+    'Authorization': f'Token {GH_UNSCOPED_TOKEN}',
     'Accept': 'application/vnd.github.v3+json',
     'User-agent': 'MDPress client'
   })
@@ -44,7 +44,7 @@ def get_gh_last_commit(acct, repo, ref, path=None):
   start = now()
   url = f'https://api.github.com/repos/{acct}/{repo}/commits?sha={ref}&page=1&per_page=1{"&path="+path if path else ""}'
   resp = requests.get(url, headers={
-    'Authorization': f'Token {GH_ACCESS_TOKEN}',
+    'Authorization': f'Token {GH_UNSCOPED_TOKEN}',
     'Accept': 'application/vnd.github.v3+json',
     'User-agent': 'MDPress client'
   })
@@ -54,24 +54,21 @@ def get_gh_last_commit(acct, repo, ref, path=None):
   return last_commit_date
 
 def gh_dir_list(acct, repo, path=None, ref=None):
-  start = now()
   url = f'https://api.github.com/repos/{acct}/{repo}/contents/{path if path else ""}'
   if ref:
     url += f'?ref={ref}'
   resp = requests.get(url, headers={
-    'Authorization': f'Token {GH_ACCESS_TOKEN}',
+    'Authorization': f'Token {GH_UNSCOPED_TOKEN}',
     'Accept': 'application/vnd.github.v3+json',
     'User-agent': 'MDPress client'
   })
-  # logger.info(json.dumps(resp.json(),indent=2))
-  logger.debug(f'gh_dir_list: acct={acct} repo={repo} path={path} elapsed={round(now()-start,3)}')
-  return [item['name'] for item in resp.json()] if resp.status_code == 200 else []
+  return resp.json() if resp.status_code == 200 else []
 
 def gh_repo_info(acct, repo):
   start = now()
   url = f'https://api.github.com/repos/{acct}/{repo}'
   resp = requests.get(url, headers={
-    'Authorization': f'Token {GH_ACCESS_TOKEN}',
+    'Authorization': f'Token {GH_UNSCOPED_TOKEN}',
     'Accept': 'application/vnd.github.v3+json',
     'User-agent': 'MDPress client'
   })
@@ -86,7 +83,7 @@ def gh_user_info(login=None, acct=None, repo=None):
     login = gh_repo_info(acct, repo)['owner']['login']
   url = f'https://api.github.com/users/{login}'
   resp = requests.get(url, headers={
-    'Authorization': f'Token {GH_ACCESS_TOKEN}',
+    'Authorization': f'Token {GH_UNSCOPED_TOKEN}',
     'Accept': 'application/vnd.github.v3+json',
     'User-agent': 'MDPress client'
   })
@@ -147,7 +144,8 @@ def manifestid_to_url(manifestid):
   acct, repo, *path = manifestid[3:].split('/')
   return f'https://raw.githubusercontent.com/{acct}/{repo}/main/{"/".join(path)}'
   
-def get_iiif_metadata(manifestid):
+def get_iiif_metadata(**kwargs):
+  manifestid = kwargs.get('manifestid')
   start = now()
   acct, repo, *path = manifestid[3:].split('/')
   repo_info = gh_repo_info(acct, repo)
@@ -184,7 +182,7 @@ def get_iiif_metadata(manifestid):
     }
   
   for key in gh_metadata.keys():
-    if key in ('label', 'metadata', 'navDate', 'provider', 'rights', 'requiredStatement', 'source', 'summary'):
+    if key in ('label', 'metadata', 'navDate', 'orientation', 'provider', 'rights', 'requiredStatement', 'source', 'summary'):
       metadata[key] = gh_metadata[key]
     elif key in ('depicts', 'digital__representation_of'):
       qids = gh_metadata[key] if isinstance(gh_metadata[key], list) else [gh_metadata[key]]
