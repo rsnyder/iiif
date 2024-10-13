@@ -25,6 +25,7 @@ import yaml
 
 import gh
 import wc
+import wd
 
 from PIL import Image
 Image.MAX_IMAGE_PIXELS = 1000000000
@@ -68,8 +69,9 @@ def exists(key):
 
 def download(url, url_hash):
   start = now()
+  logger.info(f'download: url={url} url_hash={url_hash}')
   extension = url.split('.')[-1].lower()
-  logger.debug(f'download: url={url} url_hash={url_hash} extension={extension}')
+  path = None
   if 'raw.githubusercontent.com' in url and url.split('/')[-1].split('.')[-1].lower() not in ('gif', 'jpg', 'jpeg', 'mp3', 'mp4', 'ogg', 'ogv', 'png', 'tif', 'tiff', 'webm'):
     acct, repo, ref, *path = url.split('/')[3:]
     path[-1] = f'{path[-1].replace(".yaml","")}.yaml'
@@ -126,7 +128,8 @@ def image_info(url_hash, refresh=False):
       'format': Image.MIME[img.format],
       'width': img.width,
       'height': img.height,
-      'size': os.stat(path).st_size
+      'size': os.stat(path).st_size,
+      'id': sha256(img.tobytes()).hexdigest()[0:8]
     })
     if 'exif' in info: return info
     _exif = exif_data(path)
@@ -161,6 +164,7 @@ def media_info(path):
   _media_info = {}
   mime = magic.from_file(path, mime=True)
   _type = mime.split('/')[0]
+  logger.info(f'media_info: path={path} mime={mime} type={_type}')
   if _type in ('audio', 'video'):
     _av_info = av_info(path)
     if _av_info:
@@ -222,7 +226,7 @@ def get_image_data(**kwargs):
   _media_info = json.loads(s3.get_object(Bucket='mdpress-image-info', Key=f'{url_hash}.json')['Body'].read()) if not refresh and exists(f'{url_hash}.json') else {}
   if not _media_info:
     path = download(url, url_hash)
-    _type = 'av' if extension in ('mp3', 'mp4', 'webm', 'ogg', 'ogv') else 'image'
+    _type = 'av' if extension in ('mp3', 'mp4', 'webm', 'oga', 'ogg', 'ogv') else 'image'
     if _type == 'av':
       _media_info = media_info(path)
     else:
@@ -272,8 +276,9 @@ def make_manifest(manifestid, url_hash, image_info, image_metadata, baseurl='htt
   annotation_body = annotation['body']
   _type = image_info.get('type').lower()
   if _type in ('sound', 'video'):
-    canvas['duration'] = image_info['duration']
-    annotation_body['duration'] = image_info['duration']
+    if 'duration' in image_info:
+      canvas['duration'] = image_info.get('duration')
+      annotation_body['duration'] = image_info.get('duration')
   if _type in ('image', 'video'):
     canvas['width'] = image_info['width']
     canvas['height'] = image_info['height']
@@ -323,6 +328,8 @@ def make_manifest(manifestid, url_hash, image_info, image_metadata, baseurl='htt
         'label': { 'en': [ key ] },
         'value': { 'en': [ image_info[key] ] }
       })
+  
+  if 'id' in image_info: manifest['metadata'].append({'label': { 'en': [ 'annoid' ] },'value': { 'en': [ image_info['id'] ] }})
 
   return manifest
 
@@ -391,7 +398,11 @@ def generate(**kwargs):
   elif manifestid.startswith('wc:'):
     url = wc.manifestid_to_url(manifestid)
     metadata_fn = wc.get_iiif_metadata
-    
+  
+  elif manifestid.startswith('wd:'):
+    url = wd.manifestid_to_url(manifestid)
+    metadata_fn = wd.get_iiif_metadata
+
   if metadata_fn:
     url_hash = sha256(url.encode('utf-8')).hexdigest()
     kwargs['url'] = url
@@ -409,7 +420,7 @@ def generate(**kwargs):
         except Exception as exc:
           logger.error(traceback.format_exc())
   
-  logger.debug(json.dumps(manifest_data, indent=2))
+  logger.info(json.dumps(manifest_data, indent=2))
   
   manifest = make_manifest(manifestid, url_hash, manifest_data['image-info'], manifest_data['metadata'])
   logger.info(f'generate: manifestid={manifestid} elapsed={round(now()-start,3)}')

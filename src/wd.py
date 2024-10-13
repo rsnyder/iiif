@@ -18,6 +18,7 @@ import requests
 logging.getLogger('requests').setLevel(logging.INFO)
 
 from expiringdict import ExpiringDict
+image_urls = ExpiringDict(max_len=100, max_age_seconds=1800) # cache image urls for 30 minutes
 wd_entities = ExpiringDict(max_len=100, max_age_seconds=1800) # cache entities for 30 minutes
 wc_entities = ExpiringDict(max_len=100, max_age_seconds=1800)
 
@@ -57,10 +58,9 @@ def _extract_text(val, lang='en'):
   return (_elem.text if _elem else soup.text).strip()
   
 def _get_wc_metadata(title):
-  # url = f'https://commons.wikimedia.org/w/api.php?format=json&action=query&titles=File:{quote(title)}&prop=imageinfo&iiprop=extmetadata|size|mime'
-  url = f'https://commons.wikimedia.org/w/api.php?format=json&action=query&titles=File:{title}&prop=imageinfo&iiprop=extmetadata|size|mime'
+  url = f'https://commons.wikimedia.org/w/api.php?format=json&action=query&titles=File:{quote(title)}&prop=imageinfo&iiprop=extmetadata|size|mime'
   resp = requests.get(url)
-  logger.info(f'{url} {resp.status_code}')
+  logger.debug(f'{url} {resp.status_code}')
   if resp.status_code == 200:
     return list(resp.json()['query']['pages'].values())[0]
   
@@ -135,12 +135,36 @@ def wc_title_to_url(title, width=1200):
     url = f'{baseurl}thumb/{md5[:1]}/{md5[:2]}/{quote(title)}/{width}px-${quote(title)}' if width is None else f'{baseurl}{md5[:1]}/{md5[:2]}/{quote(title)}'
   return url
 
+def _get_wd_image_url(qid):
+  url = image_urls.get(qid)
+  if not url:
+    query = f'SELECT ?image WHERE {{ wd:{qid} wdt:P18 ?image . }}'
+    resp = requests.get(
+      f'https://query.wikidata.org/sparql?query={quote(query)}',
+      headers = {
+        'Content-Type': 'application/x-www-form-urlencoded', 
+        'Accept': 'application/sparql-results+json',
+        'User-Agent': 'MDPress Client'
+      }
+    )
+    if resp.status_code == 200:
+      results = resp.json()['results']['bindings']
+      urls = [rec['image']['value'] for rec in results]
+      title = urls[0].split('/')[-1].replace('File:','') if len(urls) > 0 else None
+      if title:
+        url = wc_title_to_url(title)
+        image_urls[qid] = url
+  return url
+      
 def manifestid_to_url(manifestid):
-  return wc_title_to_url(manifestid[3:])
+  qid = manifestid[3:]
+  return _get_wd_image_url(qid)
 
 def get_iiif_metadata(**kwargs):
   manifestid = kwargs.get('manifestid')
-  title = unquote(manifestid[3:]).replace(' ','_')
+  qid = manifestid[3:]
+  image_url = _get_wd_image_url(qid)
+  title = unquote(image_url.split('/')[-1]).replace(' ','_')
   start = now()
   
   dro_qid = None
@@ -154,7 +178,7 @@ def get_iiif_metadata(**kwargs):
   imageinfo = props['wc_metadata']['imageinfo'][0] if 'imageinfo' in props['wc_metadata'] else {}
   extmetadata = imageinfo['extmetadata'] if 'extmetadata' in imageinfo else {}
 
-  logger.info(json.dumps(props.get('wc_entity', {}), indent=2))
+  logger.debug(json.dumps(props.get('wc_entity', {}), indent=2))
 
   lang = 'none'
   
@@ -169,8 +193,6 @@ def get_iiif_metadata(**kwargs):
     if fld in extmetadata:
       license_str = extmetadata[fld]['value'].upper()
       break
-    
-  logger.info(f'license_str={license_str}')
   if license_str:
     _match = re.search(r'-?(\d\.\d)\s*$', license_str)
     version = _match[1] if _match else None

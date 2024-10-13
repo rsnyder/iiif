@@ -30,6 +30,7 @@ logging.getLogger('requests').setLevel(logging.WARNING)
 
 import gh
 import wc
+import wd
 
 app = FastAPI(title='IIIF Presentation API', root_path='/')
 
@@ -78,10 +79,16 @@ def _update_image_service(manifest):
 
 def _manifestid_to_url(manifestid):
   if manifestid.startswith('gh:'):
-    return gh.manifestid_to_url(manifestid)
-  elif manifestid.startswith('wc:'):
-    return wc.manifestid_to_url(manifestid)
-
+    return manifestid, gh.manifestid_to_url(manifestid)
+  elif manifestid.startswith('wc:') or manifestid.startswith('https://upload.wikimedia.org/wikipedia/commons'):
+    if manifestid.startswith('http'):
+      manifestid = f'wc:{manifestid.split("/")[-1]}'
+    return manifestid, wc.manifestid_to_url(manifestid)
+  elif manifestid.startswith('wd:'):
+    return manifestid, wd.manifestid_to_url(manifestid)
+  elif manifestid.startswith('http'):
+    return manifestid, manifestid
+  
 def _images_from_dir_list(dir_list):
   files = [item for item in dir_list if item['type'] == 'file']
   images = [item for item in files if item['name'].split('.')[-1].lower() in ('gif', 'jpg', 'jpeg', 'png', 'tif', 'tiff')]
@@ -106,7 +113,7 @@ def docs():
 async def manifest(manifestid: str, refresh: Optional[str] = None):
   start = now()
   refresh = refresh in ('', 'true')
-  url = _manifestid_to_url(manifestid)
+  manifestid, url = _manifestid_to_url(manifestid)
   imageid = sha256(url.encode('utf-8')).hexdigest()
   manifest = json.loads(manifest_cache.get(imageid, '{}')) if not refresh else None
   cached = manifest is not None
@@ -134,9 +141,11 @@ async def get_or_create_manifest(request: Request, refresh: Optional[str] = None
   return _update_image_service(manifest)
 
 @app.get('thumbnail/{manifestid:path}')
-async def thumbnail(manifestid: str, refresh: Optional[str] = None):
+async def thumbnail(manifestid: str, url: Optional[str] = None, refresh: Optional[str] = None):
   refresh = refresh in ('', 'true')
-  url = _manifestid_to_url(manifestid)
+  logger.info(url)
+  url = url or _manifestid_to_url(manifestid)
+  logger.info(f'thumbnail: url={url}')
   imageid = sha256(url.encode('utf-8')).hexdigest()
   logger.info(f'thumbnail: imageid={imageid} exists={imageid+".tif" in image_cache}')
   manifest = json.loads(manifest_cache.get(imageid, '{}')) if not refresh else None
@@ -246,13 +255,15 @@ async def image_viewer(request: Request, manifestid: str):
       
       viewer_html = viewer_html.replace('gh-dir=""', f'gh-dir="{manifestid[3:]}"')
       if LOCAL_WC:
-        viewer_html = viewer_html.replace('https://www.mdpress.io/wc/dist/js/index.js', f'http://localhost:{LOCAL_WC_PORT}/main.ts')
+        viewer_html = viewer_html.replace('https://cdn.jsdelivr.net/npm/juncture-digital/js/index.js', f'http://localhost:{LOCAL_WC_PORT}/main.ts')
+        viewer_html = viewer_html.replace('https://v3.juncture-digital.org/wc/dist/js/index.js', f'http://localhost:{LOCAL_WC_PORT}/main.ts')
       return Response(content=viewer_html, media_type='text/html')
 
   viewer_html = open(f'{SCRIPT_DIR}/image.html', 'r').read()
   viewer_html = viewer_html.replace('src=""', f'src="{manifestid}"')
   if LOCAL_WC:
-    viewer_html = viewer_html.replace('https://www.mdpress.io/wc/dist/js/index.js', f'http://localhost:{LOCAL_WC_PORT}/main.ts')
+    viewer_html = viewer_html.replace('https://cdn.jsdelivr.net/npm/juncture-digital/js/index.js', f'http://localhost:{LOCAL_WC_PORT}/main.ts')
+    viewer_html = viewer_html.replace('https://v3.juncture-digital.org/wc/dist/js/index.js', f'http://localhost:{LOCAL_WC_PORT}/main.ts')
   return Response(content=viewer_html, media_type='text/html')
 
   

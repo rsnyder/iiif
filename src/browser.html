@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>MDPress IIIF Viewer</title>
+    <title>Juncture IIIF Image Browser</title>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@shoelace-style/shoelace@2.14.0/cdn/themes/light.css" />
     <link href="https://fonts.googleapis.com/css?family=Roboto:100,300,400,500,700,900" rel="stylesheet">
     <style>
@@ -29,19 +29,19 @@
   </head>
   <body>
     <main>
-      <mdp-menu auth="github"></mdp-menu>
+      <ve-menu auth="github"></ve-menu>
       <div class="breadcrumbs"></div>
       <div class="dirs"></div>
       
       <sl-tab-group>
         <sl-tab slot="nav" panel="gallery">Gallery</sl-tab>
         <sl-tab slot="nav" panel="map">Map</sl-tab>
-        <sl-tab-panel name="gallery"><mdp-gallery gh-dir=""></mdp-gallery></sl-tab-panel>
-        <sl-tab-panel name="map"><mdp-map gh-dir=""></mdp-map></sl-tab-panel>
+        <sl-tab-panel name="gallery"><ve-gallery gh-dir=""></ve-gallery></sl-tab-panel>
+        <sl-tab-panel name="map"><ve-map gh-dir="" fit></ve-map></sl-tab-panel>
       </sl-tab-group>  
     </main>
 
-    <script src="https://www.mdpress.io/v3/dist/js/index.js" type="module"></script>
+    <script src="https://cdn.jsdelivr.net/npm/juncture-digital/js/ghp.js" type="module"></script>
     <script type="module" src="https://cdn.jsdelivr.net/npm/@shoelace-style/shoelace@2.14.0/cdn/shoelace-autoloader.js"></script>
   
     <script>

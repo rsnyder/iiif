@@ -3,10 +3,20 @@
   <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>MDPress IIIF Viewer</title>
+    <title>Juncture IIIF Viewer</title>
   </head>
   <body style="height:100vh;">
-    <mdp-image src="" style="height:100%;"></mdp-image>
-    <script src="https://www.mdpress.io/v3/dist/js/index.js" type="module"></script>
+    <ve-image src="" style="height:100%;"></ve-image>
+    <!-- <script src="https://cdn.jsdelivr.net/npm/juncture-digital/js/ghp.js" type="module"></script> -->
+    <script src="https://v3.juncture-digital.org/wc/dist/js/index.js" type="module"></script>
+    <script>
+      
+      new MutationObserver((mutations) => {
+        mutations.forEach((mutation) => {
+            if (mutation?.attributeName === 'manifest') document.title = `Juncture IIIF Viewer: ${document.querySelector('ve-image').getLabel()}`
+          })
+        }).observe(document.querySelector('ve-image'), { attributes: true })
+
+    </script>
   </body>
 </html>
