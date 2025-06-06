@@ -121,7 +121,7 @@ def _get_location_data(qid, lang='en'):
       coords = [float(coord) for coord in results[0]['coords']['value'].replace('Point(','').replace(')','').split(' ')] if 'coords' in results[0] else None
   return label, description, coords
 
-def wc_title_to_url(title, width=1200):
+def wc_title_to_url(title, width=None):
   title = unquote(title).replace(' ','_')
   md5 = hashlib.md5(title.encode('utf-8')).hexdigest()
   logger.info(f'wc_title_to_url: title={title} md5={md5}')
@@ -132,7 +132,7 @@ def wc_title_to_url(title, width=1200):
   elif ext in ('tif', 'tiff'):
     url = f'{baseurl}thumb/{md5[:1]}/{md5[:2]}/{quote(title)}/{width}px-${quote(title)}.jpg'
   else:
-    url = f'{baseurl}thumb/{md5[:1]}/{md5[:2]}/{quote(title)}/{width}px-${quote(title)}' if width is None else f'{baseurl}{md5[:1]}/{md5[:2]}/{quote(title)}'
+    url = f'{baseurl}thumb/{md5[:1]}/{md5[:2]}/{quote(title)}/{width}px-${quote(title)}' if width is not None else f'{baseurl}{md5[:1]}/{md5[:2]}/{title.replace(" ","_")}'
   return url
 
 def manifestid_to_url(manifestid):
@@ -226,7 +226,11 @@ def get_iiif_metadata(**kwargs):
   f_number = float(entity_data['statements']['P6790'][0]['mainsnak']['datavalue']['value']['amount'].replace('+','').replace('-','')) if 'P6790' in entity_data['statements'] else None
   iso = int(entity_data['statements']['P6789'][0]['mainsnak']['datavalue']['value']['amount'].replace('+','').replace('-','')) if 'P6789' in entity_data['statements'] else None
   
-  depicts = [item['mainsnak']['datavalue']['value']['id'] for item in entity_data['statements']['P180']] if 'P180' in entity_data['statements'] else []
+  depicts = []
+  if 'P180' in entity_data['statements']:
+    for item in entity_data['statements']['P180']:
+      if 'datavalue' in item['mainsnak']:
+        depicts.append(item['mainsnak']['datavalue']['value']['id'])
   if len(depicts) > 0:
     labels = _get_entity_labels(depicts, lang)
     depicts = [f'<a href="https://www.wikidata.org/entity/{qid}">{labels[qid]}</a>' for qid in depicts]

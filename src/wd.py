@@ -121,7 +121,7 @@ def _get_location_data(qid, lang='en'):
       coords = [float(coord) for coord in results[0]['coords']['value'].replace('Point(','').replace(')','').split(' ')] if 'coords' in results[0] else None
   return label, description, coords
 
-def wc_title_to_url(title, width=1200):
+def wc_title_to_url(title, width=None):
   title = unquote(title).replace(' ','_')
   md5 = hashlib.md5(title.encode('utf-8')).hexdigest()
   logger.info(f'wc_title_to_url: title={title} md5={md5}')

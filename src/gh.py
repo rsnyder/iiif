@@ -98,6 +98,16 @@ def get_default_branch(acct, repo):
   logger.debug(f'get_default_branch: acct={acct} repo={repo} elapsed={round(now()-start,3)}')
   return repo_info['default_branch'] if repo_info else None
 
+def get_branches(acct, repo):
+  url = f'https://api.github.com/repos/{acct}/{repo}/branches'
+  resp = requests.get(url, headers={
+    'Authorization': f'Token {GH_UNSCOPED_TOKEN}',
+    'Accept': 'application/vnd.github+json',
+    'User-agent': 'MDPress client'
+  })
+  branches = [branch['name'] for branch in resp.json()] if resp.status_code == 200 else []
+  return branches
+
 licenses = {
   # Creative Commons Licenses
   'PD': {'label': 'Public Domain', 'url': ''},
@@ -142,14 +152,25 @@ def get_entity_labels(qids, lang='en'):
 
 def manifestid_to_url(manifestid):
   acct, repo, *path = manifestid[3:].split('/')
-  return f'https://raw.githubusercontent.com/{acct}/{repo}/main/{"/".join(path)}'
+  branches = get_branches(acct, repo)
+  if path[0] in branches:
+    branch = path[0]
+    path = path[1:]
+  else:
+    branch = branches[0] if len(branches) == 1 else get_default_branch(acct, repo)
+  return f'https://raw.githubusercontent.com/{acct}/{repo}/{branch}/{"/".join(path)}'
   
 def get_iiif_metadata(**kwargs):
   manifestid = kwargs.get('manifestid')
   start = now()
   acct, repo, *path = manifestid[3:].split('/')
   repo_info = gh_repo_info(acct, repo)
-  ref = repo_info['default_branch']
+  branches = get_branches(acct, repo)
+  if path[0] in branches:
+    ref = path[0]
+    path = path[1:]
+  else:
+    ref = repo_info['default_branch']
   user_info = gh_user_info(repo_info['owner']['login'])
 
   fname = path[-1].split('.')[0]
@@ -163,6 +184,7 @@ def get_iiif_metadata(**kwargs):
   
   path[-1] = '.'.join(path[-1].split('.')[:-1]) + '.yaml'
   gh_metadata = yaml.load(get_gh_file(acct, repo, ref, '/'.join(path)) or '', Loader=yaml.FullLoader) or {}
+  print(json.dumps(gh_metadata, indent=2))
   lang = gh_metadata.get('language', 'en')
   
   metadata = {

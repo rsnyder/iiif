@@ -69,16 +69,17 @@ def exists(key):
 
 def download(url, url_hash):
   start = now()
-  logger.info(f'download: url={url} url_hash={url_hash}')
-  extension = url.split('.')[-1].lower()
+  extension = url.split('/')[-1].split('.')[-1].lower()
   path = None
-  if 'raw.githubusercontent.com' in url and url.split('/')[-1].split('.')[-1].lower() not in ('gif', 'jpg', 'jpeg', 'mp3', 'mp4', 'ogg', 'ogv', 'png', 'tif', 'tiff', 'webm'):
+  if 'raw.githubusercontent.com' in url and extension not in ('gif', 'jpg', 'jpeg', 'mp3', 'mp4', 'ogg', 'ogv', 'png', 'tif', 'tiff', 'webm'):
     acct, repo, ref, *path = url.split('/')[3:]
     path[-1] = f'{path[-1].replace(".yaml","")}.yaml'
-    logger.debug(f'get_gh_file: acct={acct} repo={repo} ref={ref} path={path}')
+    logger.info(f'get_gh_file: acct={acct} repo={repo} ref={ref} path={path}')
     gh_metadata = yaml.load(gh.get_gh_file(acct, repo, ref, '/'.join(path)), Loader=yaml.FullLoader)
     url = gh_metadata.get('image_url', url)
-  resp = requests.get(url, headers={'User-agent': 'IIIF service'})
+    print(f'GH Metadata: {json.dumps(gh_metadata, indent=2)}')
+    print(f'GH URL: {url}')
+  resp = requests.get(url, headers={'User-agent': 'IIIF service'}, verify=False)
   if resp.status_code == 200:
     path = f'/tmp/{url_hash}'
     with open(path, 'wb') as fp:
@@ -382,26 +383,25 @@ def metadata_from_obj(**kwargs):
 
 def generate(**kwargs):
   start = now()
-  metadata_fn = None
-  
+  metadata_fn = metadata_from_obj
+
   manifestid = kwargs.get('manifestid')
+  url = kwargs.get('url') or manifestid
+
   logger.info(f'generate: manifestid={manifestid}')
   
-  if not manifestid: # create from object
-    url = kwargs.get('url')
-    metadata_fn = metadata_from_obj
+  if manifestid:
+    if manifestid.startswith('gh:'):
+      url = gh.manifestid_to_url(manifestid)
+      metadata_fn = gh.get_iiif_metadata
     
-  elif manifestid.startswith('gh:'):
-    url = gh.manifestid_to_url(manifestid)
-    metadata_fn = gh.get_iiif_metadata
-  
-  elif manifestid.startswith('wc:'):
-    url = wc.manifestid_to_url(manifestid)
-    metadata_fn = wc.get_iiif_metadata
-  
-  elif manifestid.startswith('wd:'):
-    url = wd.manifestid_to_url(manifestid)
-    metadata_fn = wd.get_iiif_metadata
+    elif manifestid.startswith('wc:'):
+      url = wc.manifestid_to_url(manifestid)
+      metadata_fn = wc.get_iiif_metadata
+    
+    elif manifestid.startswith('wd:'):
+      url = wd.manifestid_to_url(manifestid)
+      metadata_fn = wd.get_iiif_metadata
 
   if metadata_fn:
     url_hash = sha256(url.encode('utf-8')).hexdigest()

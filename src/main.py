@@ -10,16 +10,23 @@ logger.setLevel(logging.INFO)
 import argparse, os, sys, json
 from hashlib import sha256
 from time import time as now
+from urllib.parse import quote
+import re
+import httpx
+import boto3
+from botocore.exceptions import ClientError
+import io
+from PIL import Image
 
 SCRIPT_DIR = os.path.abspath(os.path.dirname(__file__))
 sys.path.append(SCRIPT_DIR)
-from typing import Optional
+from typing import Tuple, Optional
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import Response
 from fastapi.middleware.cors import CORSMiddleware
 
-from starlette.responses import RedirectResponse
+from starlette.responses import RedirectResponse, StreamingResponse
 
 from prezi_upgrader import Upgrader
 
@@ -67,7 +74,8 @@ def _update_image_service(manifest):
   orientation = orientation[0] if isinstance(orientation, list) else orientation
   rotation = 0 if orientation == 1 else 90 if orientation == 6 else 180 if orientation == 3 else 270
   logger.info(f'_update_image_service: width={width} rotation={rotation}')
-  if width > 512:
+  # if width > 512:
+  if width > 0:
     image_service = image_data['service'][0]
     image_hash = image_service['id'].split('/')[-1]
     image_service['id'] = f'{IMAGE_SERVICE_BASEURL}/iiif/3/{image_hash}'
@@ -78,6 +86,7 @@ def _update_image_service(manifest):
   return manifest
 
 def _manifestid_to_url(manifestid):
+  logger.info(f'_manifestid_to_url: manifestid={manifestid}')
   if manifestid.startswith('gh:'):
     return manifestid, gh.manifestid_to_url(manifestid)
   elif manifestid.startswith('wc:') or manifestid.startswith('https://upload.wikimedia.org/wikipedia/commons'):
@@ -86,6 +95,8 @@ def _manifestid_to_url(manifestid):
     return manifestid, wc.manifestid_to_url(manifestid)
   elif manifestid.startswith('wd:'):
     return manifestid, wd.manifestid_to_url(manifestid)
+  elif manifestid.startswith('default:'):
+    return manifestid[8:], manifestid[8:]
   elif manifestid.startswith('http'):
     return manifestid, manifestid
   
@@ -109,20 +120,6 @@ def _images_from_dir_list(dir_list):
 def docs():
   return RedirectResponse(url='/docs')
 
-@app.get('{manifestid:path}/manifest.json')
-async def manifest(manifestid: str, refresh: Optional[str] = None):
-  start = now()
-  refresh = refresh in ('', 'true')
-  manifestid, url = _manifestid_to_url(manifestid)
-  imageid = sha256(url.encode('utf-8')).hexdigest()
-  manifest = json.loads(manifest_cache.get(imageid, '{}')) if not refresh else None
-  cached = manifest is not None
-  if not manifest:
-    manifest = get_manifest(manifestid=manifestid, refresh=refresh)
-    manifest_cache[imageid] = json.dumps(manifest)
-  logger.info(f'manifest: manifestid={manifestid} cached={cached} refresh={refresh} elapsed={round(now()-start,3)}')
-  return _update_image_service(manifest)
-
 @app.post('manifest/')
 @app.post('manifest')
 async def get_or_create_manifest(request: Request, refresh: Optional[str] = None):
@@ -144,7 +141,7 @@ async def get_or_create_manifest(request: Request, refresh: Optional[str] = None
 async def thumbnail(manifestid: str, url: Optional[str] = None, refresh: Optional[str] = None):
   refresh = refresh in ('', 'true')
   logger.info(url)
-  url = url or _manifestid_to_url(manifestid)
+  manifestid, url = url or _manifestid_to_url(manifestid)
   logger.info(f'thumbnail: url={url}')
   imageid = sha256(url.encode('utf-8')).hexdigest()
   logger.info(f'thumbnail: imageid={imageid} exists={imageid+".tif" in image_cache}')
@@ -153,6 +150,186 @@ async def thumbnail(manifestid: str, url: Optional[str] = None, refresh: Optiona
     manifest = get_manifest(manifestid=manifestid, refresh=refresh)
     manifest_cache[imageid] = json.dumps(manifest)
   return RedirectResponse(url=_update_image_service(manifest)['thumbnail'][0]['id'])
+
+def s3_key_exists(bucket_name: str, key: str) -> bool:
+    """
+    Check whether a given key exists in the specified S3 bucket.
+
+    :param bucket_name: Name of the S3 bucket (e.g., "juncture-thumbnail-cache")
+    :param key:         The object key to check (e.g., "image/foo.png")
+    :return:            True if the object exists, False if it does not.
+    """
+    s3 = boto3.client('s3')
+    try:
+        s3.head_object(Bucket=bucket_name, Key=key)
+        return True
+    except ClientError as e:
+        # If a 404 Not Found error is thrown, the key does not exist.
+        if e.response["Error"]["Code"] == "404":
+            return False
+        # For any other error (403, 400, etc.), you may want to re-raise or handle differently.
+        raise
+
+def upload_image_to_s3(bucket_name: str, key: str, image_bytes: bytes, content_type: str = "image/png"):
+  """
+  Uploads an image (raw bytes) to S3.
+
+  :param bucket_name:  The target S3 bucket name (e.g. "juncture-thumbnail-cache")
+  :param key:          The S3 key/path under which to store the image (e.g. "image/foo.png")
+  :param image_bytes:  The image data as raw bytes
+  :param content_type: The MIME type of the image (e.g. "image/png" or "image/jpeg")
+  """
+  s3 = boto3.client('s3')
+  s3.put_object(
+    Bucket=bucket_name,
+    Key=key,
+    Body=image_bytes,
+    ContentType=content_type,
+    CacheControl="max-age=86400"  # optional: instruct CloudFront (and browsers) to cache for 1 day
+  )
+
+def resize_image(img: Image.Image, size: str) -> Image.Image:
+  """
+  Given a PIL Image `img` and a comma-separated `size` string "w,h",
+  return a new Image resized as follows:
+    - If both w>0 and h>0: force resize to (w, h)
+    - If h==0: scale by width only
+    - If w==0: scale by height only
+    - If both are 0: return original img unchanged
+  """
+  # 1) Parse "w,h" into two integers, blank→0
+  parts = size.split(",", 1)
+  if len(parts) < 2:
+    parts += [""] * (2 - len(parts))
+
+  # Convert blank or whitespace string to 0, else int(...)
+  target_w, target_h = [
+    int(p.strip()) if p.strip() else 0
+    for p in parts
+  ]
+  buf = io.BytesIO()  
+  
+  # Case A: both dimensions > 0 → force exact resize
+  if target_w > 0 and target_h > 0:
+    resized_img = img.resize((target_w, target_h), resample=Image.LANCZOS)
+    resized_img.save(buf, format='JPEG')
+
+  # Case B: height == 0 → scale by width only
+  if target_h == 0 and target_w > 0:
+    # Make a copy so we don't mutate original
+    resized_img = img.copy()
+    # Provide a huge max-height so only width is constrained
+    max_width = target_w
+    max_height = sys.maxsize
+    resized_img.thumbnail((max_width, max_height), resample=Image.LANCZOS)
+    resized_img.save(buf, format='JPEG')
+
+  # Case C: width == 0 → scale by height only
+  elif target_w == 0 and target_h > 0:
+    # Make a copy so we don't mutate original
+    resized_img = img.copy()
+    max_width = sys.maxsize
+    max_height = target_h
+    resized_img.thumbnail((max_width, max_height), resample=Image.LANCZOS)
+    resized_img.save(buf, format='JPEG')
+    
+  else: # Case D: both w==0 and h==0 → return original
+    img.save(buf, format='JPEG')
+  
+  return buf.getvalue()
+  
+async def _get_image(image_key, transformations: Optional[str] = '') -> Optional[bytes]:
+  # Parse transformation string like: w_300,h_200,c_fill
+  params = {}
+  for part in transformations.split(','):
+    if '_' in part:
+      key, val = part.split('_', 1)
+      params[key] = val
+  
+  if 'w' in params:
+    if 'h' in params: size = f'{params["w"]},{params["h"]}'
+    else: size = f'{params["w"]},'
+  elif 'h' in params: size = f',{params["h"]}'
+  else: 
+    transformations = 'w_1000'
+    size = '1000,'
+  
+  _, url = _manifestid_to_url(image_key)
+  imageid = sha256(url.encode('utf-8')).hexdigest()  
+  s3_key =  f'image/{image_key}/{transformations}'
+  iiif_url = f'https://bxw3h77njs6t5nf7bo2vykqxvi0lzkxb.lambda-url.us-east-1.on.aws/iiif/3/{imageid}/full/{size}/0/default.jpg'
+  
+  print(f'_get_image: image_key={image_key} transformations={transformations} s3_key={s3_key} iiif_url={iiif_url} s3_key_exists={s3_key_exists("juncture-thumbnail-cache", s3_key)}')
+
+  if s3_key_exists('juncture-thumbnail-cache', s3_key):
+    s3_client = boto3.client('s3')
+    try:
+      resp = s3_client.get_object(Bucket='juncture-thumbnail-cache', Key=s3_key)
+    except ClientError as e:
+        # If the object does not exist, return a 404; else re‐raise
+        error_code = e.response['Error']['Code']
+        if error_code in ('NoSuchKey', '404'):
+            raise HTTPException(status_code=404, detail='Object not found in S3')
+        raise
+
+    # Read the object’s body into bytes
+    body_stream = resp['Body']
+    content = body_stream.read()
+
+    # Determine the Content-Type from the S3 response headers (default to application/octet-stream)
+    content_type = resp.get('ContentType', 'application/octet-stream')
+
+    # Return as a streaming response (suitable for large files)
+    return StreamingResponse(io.BytesIO(content), media_type=content_type)
+  else:
+    try:
+      async with httpx.AsyncClient() as client:
+        iiif_response = await client.get(iiif_url)
+        if iiif_response.status_code == 200:
+          image = iiif_response.content
+          upload_image_to_s3(bucket_name='juncture-thumbnail-cache', key=s3_key, image_bytes=image, content_type='image/jpeg')
+          return RedirectResponse(url=iiif_url)
+        else:
+          manifest = get_manifest_as_json(image_key)
+          image_data = _find_item(manifest, type='Annotation', attr='motivation', attr_val='painting', sub_attr='body')
+          image_response = await client.get(image_data['id'])
+          if image_response.status_code == 200:
+            image = resize_image(Image.open(io.BytesIO(image_response.content)), size=size)
+            upload_image_to_s3(bucket_name='juncture-thumbnail-cache', key=s3_key, image_bytes=image, content_type='image/jpeg')
+            return StreamingResponse(io.BytesIO(image), media_type='image/jpeg')
+          else:
+            return Response(content=f'Error fetching image: {iiif_response.status_code} - {iiif_response.text}', media_type='text/plain', status_code=iiif_response.status_code)
+    except httpx.RequestError as e:
+      # Network or DNS issues
+      raise HTTPException(status_code=502, detail=f"Network error: {str(e)}")
+
+def is_valid_transformations(transform_str: str) -> bool:
+    """
+    Returns True if transform_str is a comma-separated list of key_value pairs
+    where:
+      - key is one or more letters (a–z, case-insensitive)
+      - value is one or more alphanumeric characters (no commas or slashes)
+    Examples of valid strings:
+      "w_300"
+      "w_300,h_200,c_fill"
+    """
+    # Each segment must match `<alpha>_<alnum>`
+    segment_pattern = re.compile(r"^[A-Za-z]+_[A-Za-z0-9]+$")
+    for part in transform_str.split(","):
+        if not segment_pattern.match(part):
+            return False
+    return True
+
+@app.get('image/{image_key:path}/{transformations:path}')
+async def get_image_with_transformations(transformations: str, image_key: str):
+  if not is_valid_transformations(transformations):
+    image_key += f'/{transformations}'
+    transformations = ''
+  return await _get_image(image_key, transformations)
+
+@app.get('image/{image_key:path}')
+async def get_image_without_transformations(image_key: str):  
+  return await _get_image(image_key)
 
 def breadcrumb_el(acct, repo, path, baseurl='https://iiif.mdpress.io'):
   el = '<sl-breadcrumb>'
@@ -171,10 +348,17 @@ def gh_dirs_el(acct, repo, path, dirs, baseurl='https://iiif.mdpress.io'):
   el += '</div>'
   return el
 
+@app.get('v3/{manifest:path}')
+@app.get('v3/')
+@app.get('v3')
 @app.get('prezi2to3/')
 @app.post('prezi2to3/')
 async def prezi2to3(request: Request, manifest: Optional[str] = None):
+  logger.info(f'prezi2to3: manifest={manifest}')
   if request.method == 'GET':
+    m = re.match(r'^(?P<before>.+)(?P<arkIdentifier>ark:\/\w+\/\w+)(?P<after>.+)?', manifest)
+    if m:
+      manifest = f'{m.group("before")}{quote(m.group("arkIdentifier").replace("/","%2F"))}{m.group("after")}'
     input_manifest = requests.get(manifest).json()
   else:
     body = await request.body()
@@ -236,9 +420,39 @@ async def gh_token(code: Optional[str] = None, hostname: Optional[str] = None):
         token = token_obj['access_token'] if status_code == 200 else ''
   logger.info(f'gh_token: code={code} hostname={hostname} token={token}')
   return Response(status_code=status_code, content=token, media_type='text/plain')
-  
+
+def is_browser(user_agent):
+    # List of common browser signatures
+    browser_signatures = ['Chrome', 'Firefox', 'Safari', 'Edge', 'Opera', 'Gecko', 'WebKit']
+
+    # Check if any known browser signatures are present in the user agent string
+    return any(signature in user_agent for signature in browser_signatures)
+
+@app.get('{manifestid:path}/manifest.json')
+async def manifest(manifestid: str, refresh: Optional[str] = None):
+  return get_manifest_as_json(manifestid, refresh)
+
 @app.get('{manifestid:path}')
-async def image_viewer(request: Request, manifestid: str):
+async def image_viewer(request: Request, manifestid: str, refresh: Optional[str] = None):
+  if is_browser(request.headers['user-agent']):
+    return Response(content=get_image_viewer_html(request, manifestid), media_type='text/html')
+  else:
+    return get_manifest_as_json(manifestid, refresh)
+
+def get_manifest_as_json(manifestid: str, refresh: Optional[str] = None):
+    start = now()
+    refresh = refresh in ('', 'true')
+    manifestid, url = _manifestid_to_url(manifestid)
+    imageid = sha256(url.encode('utf-8')).hexdigest()
+    manifest = json.loads(manifest_cache.get(imageid, '{}')) if not refresh else None
+    cached = manifest is not None
+    if not manifest:
+      manifest = get_manifest(manifestid=manifestid, refresh=refresh)
+      manifest_cache[imageid] = json.dumps(manifest)
+    logger.info(f'manifest: manifestid={manifestid} cached={cached} refresh={refresh} elapsed={round(now()-start,3)}')
+    return _update_image_service(manifest)
+
+def get_image_viewer_html(request: Request, manifestid: str):
   baseurl = str(request.base_url)[:-1]
   if manifestid.startswith('gh:'):
     acct, repo, *path = manifestid[3:].split('/')
@@ -257,15 +471,14 @@ async def image_viewer(request: Request, manifestid: str):
       if LOCAL_WC:
         viewer_html = viewer_html.replace('https://cdn.jsdelivr.net/npm/juncture-digital/js/index.js', f'http://localhost:{LOCAL_WC_PORT}/main.ts')
         viewer_html = viewer_html.replace('https://v3.juncture-digital.org/wc/dist/js/index.js', f'http://localhost:{LOCAL_WC_PORT}/main.ts')
-      return Response(content=viewer_html, media_type='text/html')
+      return viewer_html
 
   viewer_html = open(f'{SCRIPT_DIR}/image.html', 'r').read()
   viewer_html = viewer_html.replace('src=""', f'src="{manifestid}"')
   if LOCAL_WC:
     viewer_html = viewer_html.replace('https://cdn.jsdelivr.net/npm/juncture-digital/js/index.js', f'http://localhost:{LOCAL_WC_PORT}/main.ts')
     viewer_html = viewer_html.replace('https://v3.juncture-digital.org/wc/dist/js/index.js', f'http://localhost:{LOCAL_WC_PORT}/main.ts')
-  return Response(content=viewer_html, media_type='text/html')
-
+  return viewer_html
   
 if __name__ == '__main__':
   import uvicorn
@@ -286,4 +499,4 @@ if __name__ == '__main__':
   uvicorn.run('main:app', port=args['port'], log_level='info', reload=args['reload'])
 else:
   from mangum import Mangum
-  handler = Mangum(app)
+  handler = Mangum(app, lifespan='off')
