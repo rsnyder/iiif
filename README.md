@@ -1,2 +1,3 @@
 # iiif
-IIIF services
+
+`image wc:Sunflower_sky_backdrop.jpg left`
