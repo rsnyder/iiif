@@ -74,13 +74,16 @@ def download(url, url_hash):
   if 'raw.githubusercontent.com' in url and extension not in ('gif', 'jpg', 'jpeg', 'mp3', 'mp4', 'ogg', 'ogv', 'png', 'tif', 'tiff', 'webm'):
     acct, repo, ref, *path = url.split('/')[3:]
     path[-1] = f'{path[-1].replace(".yaml","")}.yaml'
-    logger.info(f'get_gh_file: acct={acct} repo={repo} ref={ref} path={path}')
+    logger.debug(f'get_gh_file: acct={acct} repo={repo} ref={ref} path={path}')
     gh_metadata = yaml.load(gh.get_gh_file(acct, repo, ref, '/'.join(path)), Loader=yaml.FullLoader)
     url = gh_metadata.get('image_url', url)
     print(f'GH Metadata: {json.dumps(gh_metadata, indent=2)}')
     print(f'GH URL: {url}')
-  resp = requests.get(url, headers={'User-agent': 'IIIF service'}, verify=False)
-  if resp.status_code == 200:
+  resp = requests.get(url, headers={
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36',
+    'Referer': 'https://iiif.mdpress.io/'
+  }, verify=False)
+  if resp.status_code < 400:
     path = f'/tmp/{url_hash}'
     with open(path, 'wb') as fp:
       fp.write(resp.content)
@@ -150,7 +153,7 @@ def image_info(url_hash, refresh=False):
       info['exposure'] = f"{_exif.get('focal_length_in_35mm_film', _exif.get('focal_length'))}mm 1/{round(1/_exif['exposure_time']) if _exif['exposure_time'] < 1 else _exif['exposure_time']}s f/{_exif['f_number']} ISO {_exif['photographic_sensitivity']}"
     if 'exposure_mode' in _exif and 'exposure_program' in _exif:
       info['mode'] = f"{_exif['exposure_mode']}, {_exif['exposure_program']}"
-    info['size'] = f"{info['width']} x {info['height']} {info['format'].split('/')[-1]}"
+    # info['size'] = f"{info['width']} x {info['height']} {info['format'].split('/')[-1]}"
     s3.put_object(Bucket='mdpress-image-info', Key=s3_key, Body=json.dumps(info, indent=2))
   except:
     logger.error(traceback.format_exc())
@@ -165,7 +168,7 @@ def media_info(path):
   _media_info = {}
   mime = magic.from_file(path, mime=True)
   _type = mime.split('/')[0]
-  logger.info(f'media_info: path={path} mime={mime} type={_type}')
+  logger.debug(f'media_info: path={path} mime={mime} type={_type}')
   if _type in ('audio', 'video'):
     _av_info = av_info(path)
     if _av_info:
@@ -235,7 +238,7 @@ def get_image_data(**kwargs):
       _media_info = image_info(url_hash, refresh)
       os.remove(f'/tmp/{url_hash}')
   _media_info['url'] = url
-  logger.info(f'get_image_data: url={url} elapsed={round(now()-start,3)}')
+  logger.debug(f'get_image_data: url={url} elapsed={round(now()-start,3)}')
   return _media_info
 
 def make_manifest(manifestid, url_hash, image_info, image_metadata, baseurl='https://iiif.mdpress.io'):
@@ -323,15 +326,13 @@ def make_manifest(manifestid, url_hash, image_info, image_metadata, baseurl='htt
       }
 
   existing_metadata_keys = [m['label'][lang][0] for m in manifest['metadata']]
-  for key in ('camera', 'exposure', 'mode', 'orientation', 'size'):   
+  for key in ('camera', 'exposure', 'mode', 'orientation'):   
     if key in image_info and key not in existing_metadata_keys:
       manifest['metadata'].append({
         'label': { 'en': [ key ] },
         'value': { 'en': [ image_info[key] ] }
       })
   
-  if 'id' in image_info: manifest['metadata'].append({'label': { 'en': [ 'annoid' ] },'value': { 'en': [ image_info['id'] ] }})
-
   return manifest
 
 def metadata_from_obj(**kwargs):
@@ -388,7 +389,7 @@ def generate(**kwargs):
   manifestid = kwargs.get('manifestid')
   url = kwargs.get('url') or manifestid
 
-  logger.info(f'generate: manifestid={manifestid}')
+  logger.debug(f'generate: manifestid={manifestid}')
   
   if manifestid:
     if manifestid.startswith('gh:'):
@@ -420,10 +421,10 @@ def generate(**kwargs):
         except Exception as exc:
           logger.error(traceback.format_exc())
   
-  logger.info(json.dumps(manifest_data, indent=2))
+  logger.debug(json.dumps(manifest_data, indent=2))
   
   manifest = make_manifest(manifestid, url_hash, manifest_data['image-info'], manifest_data['metadata'])
-  logger.info(f'generate: manifestid={manifestid} elapsed={round(now()-start,3)}')
+  logger.debug(f'generate: manifestid={manifestid} elapsed={round(now()-start,3)}')
   return manifest
 
 if __name__ == '__main__':

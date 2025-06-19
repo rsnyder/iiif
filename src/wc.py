@@ -57,10 +57,9 @@ def _extract_text(val, lang='en'):
   return (_elem.text if _elem else soup.text).strip()
   
 def _get_wc_metadata(title):
-  # url = f'https://commons.wikimedia.org/w/api.php?format=json&action=query&titles=File:{quote(title)}&prop=imageinfo&iiprop=extmetadata|size|mime'
-  url = f'https://commons.wikimedia.org/w/api.php?format=json&action=query&titles=File:{title}&prop=imageinfo&iiprop=extmetadata|size|mime'
+  url = f'https://commons.wikimedia.org/w/api.php?format=json&action=query&titles=File:{quote(title)}&prop=imageinfo&iiprop=extmetadata|size|mime'
   resp = requests.get(url)
-  logger.info(f'{url} {resp.status_code}')
+  logger.debug(f'{url} {resp.status_code}')
   if resp.status_code == 200:
     return list(resp.json()['query']['pages'].values())[0]
   
@@ -124,15 +123,15 @@ def _get_location_data(qid, lang='en'):
 def wc_title_to_url(title, width=None):
   title = unquote(title).replace(' ','_')
   md5 = hashlib.md5(title.encode('utf-8')).hexdigest()
-  logger.info(f'wc_title_to_url: title={title} md5={md5}')
+  logger.debug(f'wc_title_to_url: title={title} md5={md5}')
   ext = title.split('.')[-1]
   baseurl = 'https://upload.wikimedia.org/wikipedia/commons/'
   if ext == 'svg':
-    url = f'{baseurl}thumb/{md5[:1]}/{md5[:2]}/{quote(title)}/{width}px-${quote(title)}.png'
+    url = f'{baseurl}thumb/{md5[:1]}/{md5[:2]}/{quote(title)}/{width or 1000}px-${quote(title)}.png'
   elif ext in ('tif', 'tiff'):
-    url = f'{baseurl}thumb/{md5[:1]}/{md5[:2]}/{quote(title)}/{width}px-${quote(title)}.jpg'
+    url = f'{baseurl}thumb/{md5[:1]}/{md5[:2]}/{quote(title)}/{width or 1000}px-${quote(title)}.jpg'
   else:
-    url = f'{baseurl}thumb/{md5[:1]}/{md5[:2]}/{quote(title)}/{width}px-${quote(title)}' if width is not None else f'{baseurl}{md5[:1]}/{md5[:2]}/{title.replace(" ","_")}'
+    url = f'{baseurl}thumb/{md5[:1]}/{md5[:2]}/{quote(title)}/{width or 1000}px-${quote(title)}' if width is not None else f'{baseurl}{md5[:1]}/{md5[:2]}/{title.replace(" ","_")}'
   return url
 
 def manifestid_to_url(manifestid):
@@ -154,7 +153,7 @@ def get_iiif_metadata(**kwargs):
   imageinfo = props['wc_metadata']['imageinfo'][0] if 'imageinfo' in props['wc_metadata'] else {}
   extmetadata = imageinfo['extmetadata'] if 'extmetadata' in imageinfo else {}
 
-  logger.info(json.dumps(props.get('wc_entity', {}), indent=2))
+  logger.debug(json.dumps(props.get('wc_entity', {}), indent=2))
 
   lang = 'none'
   
@@ -170,7 +169,7 @@ def get_iiif_metadata(**kwargs):
       license_str = extmetadata[fld]['value'].upper()
       break
     
-  logger.info(f'license_str={license_str}')
+  logger.debug(f'license_str={license_str}')
   if license_str:
     _match = re.search(r'-?(\d\.\d)\s*$', license_str)
     version = _match[1] if _match else None
@@ -277,5 +276,5 @@ def get_iiif_metadata(**kwargs):
   if len(exposure) > 0:
     metadata['metadata'].append({ 'label': { lang: [ 'exposure' ] }, 'value': { lang: [ ' '.join(exposure) ] }})
 
-  logger.info(f'get_iiif_metadata: manifestid={manifestid} elapsed={round(now()-start,3)}')
+  logger.debug(f'get_iiif_metadata: manifestid={manifestid} elapsed={round(now()-start,3)}')
   return metadata

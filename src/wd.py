@@ -124,7 +124,7 @@ def _get_location_data(qid, lang='en'):
 def wc_title_to_url(title, width=None):
   title = unquote(title).replace(' ','_')
   md5 = hashlib.md5(title.encode('utf-8')).hexdigest()
-  logger.info(f'wc_title_to_url: title={title} md5={md5}')
+  logger.debug(f'wc_title_to_url: title={title} md5={md5}')
   ext = title.split('.')[-1]
   baseurl = 'https://upload.wikimedia.org/wikipedia/commons/'
   if ext == 'svg':
@@ -295,5 +295,5 @@ def get_iiif_metadata(**kwargs):
   if len(exposure) > 0:
     metadata['metadata'].append({ 'label': { lang: [ 'exposure' ] }, 'value': { lang: [ ' '.join(exposure) ] }})
 
-  logger.info(f'get_iiif_metadata: manifestid={manifestid} elapsed={round(now()-start,3)}')
+  logger.debug(f'get_iiif_metadata: manifestid={manifestid} elapsed={round(now()-start,3)}')
   return metadata

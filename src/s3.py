@@ -127,7 +127,6 @@ if __name__ == '__main__':
                 if kwargs.get('upload', False):
                     path = args[0]
                     object_key = '/'.join(path.split('/')[-2:])
-                    logger.info(f'uploading {object_key} from {path}')
                     with open(path, 'rb') as fp:
                         bucket[object_key] = fp.read()
                 if kwargs.get('delete', False):

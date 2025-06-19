@@ -12,6 +12,7 @@ from time import time as now
 import datetime
 from urllib.parse import quote
 import yaml
+from copy import deepcopy
 
 import requests
 logging.getLogger('requests').setLevel(logging.INFO)
@@ -180,10 +181,12 @@ def get_iiif_metadata(**kwargs):
   license_label = licenses[license_code]['label']
   author = user_info.get('name') or user_info.get('login')
   author_url = user_info['html_url']
-  attribution_statement = f'Image <em>{label}</em> provided by <a href="{author_url}">{author}</a> under a <a href="{license_url}">{license_label} ({license_code.replace("CC-", "CC ")})</a> license'
+  default_attribution_statement = f'Image <em>{label}</em> provided by <a href="{author_url}">{author}</a> under a <a href="{license_url}">{license_label} ({license_code.replace("CC-", "CC ")})</a> license'
   
-  path[-1] = '.'.join(path[-1].split('.')[:-1]) + '.yaml'
-  gh_metadata = yaml.load(get_gh_file(acct, repo, ref, '/'.join(path)) or '', Loader=yaml.FullLoader) or {}
+  yaml_path = deepcopy(path)
+  yaml_path[-1] = '.'.join(path[-1].split('.')[:-1]) + '.yaml'
+  
+  gh_metadata = yaml.load(get_gh_file(acct, repo, ref, '/'.join(yaml_path)) or '', Loader=yaml.FullLoader) or {}
   print(json.dumps(gh_metadata, indent=2))
   lang = gh_metadata.get('language', 'en')
   
@@ -191,20 +194,25 @@ def get_iiif_metadata(**kwargs):
     'language': lang,
     'label': label,
     'metadata': [
-      { 'label': { lang: [ 'title' ] }, 'value': { lang: [ label ] }},
-      { 'label': { lang: [ 'author' ] }, 'value': { lang: [ f'<a href="{author_url}">{author}</a>' ] }},
-      { 'label': { lang: [ 'source' ] }, 'value': { lang: [ f'https://github.com/{acct}/{repo}/blob/{ref}/{"/".join(path)}' ] } }
+      # { 'label': { lang: [ 'author' ] }, 'value': { lang: [ gh_metadata['author'] if 'author' in gh_metadata else f'<a href="{author_url}">{author}</a>' ] }},
+      { 'label': { lang: [ 'source' ] }, 'value': { lang: [ gh_metadata['source'] if 'source' in gh_metadata else f'https://github.com/{acct}/{repo}/blob/{ref}/{"/".join(path)}' ] } }
     ]
   }
-  metadata['rights'] = license_url
-  if license_code not in ('PD', 'PUBLIC DOMAIN', 'PDM'):
+  metadata['rights'] = gh_metadata['rights'] if 'rights' in gh_metadata else license_url
+  if 'requiredStatement' in gh_metadata:
+    rs_label, rs_value = next(iter(gh_metadata['requiredStatement'].items()))
+    metadata['requiredStatement'] = {
+      'label': { lang: [ rs_label ]},
+      'value': { lang: [ rs_value ] }
+    }
+  elif license_code not in ('PD', 'PUBLIC DOMAIN', 'PDM'):
     metadata['requiredStatement'] = {
       'label': { lang: [ 'attribution' ] },
-      'value': { lang: [ attribution_statement ] }
+      'value': { lang: [ default_attribution_statement ] }
     }
   
   for key in gh_metadata.keys():
-    if key in ('label', 'metadata', 'navDate', 'orientation', 'provider', 'rights', 'requiredStatement', 'source', 'summary'):
+    if key in ('label', 'metadata', 'navDate', 'orientation', 'provider', 'requiredStatement', 'rights', 'source', 'summary'):
       metadata[key] = gh_metadata[key]
     elif key in ('depicts', 'digital__representation_of'):
       qids = gh_metadata[key] if isinstance(gh_metadata[key], list) else [gh_metadata[key]]
@@ -216,5 +224,5 @@ def get_iiif_metadata(**kwargs):
     else:
       metadata['metadata'].append({ 'label': { lang: [ key ] }, 'value': { lang: [ gh_metadata[key] if isinstance(gh_metadata[key], list) else [gh_metadata[key]] ] } })
 
-  logger.info(f'get_iiif_metadata: manifestid={manifestid} elapsed={round(now()-start,3)}')
+  logger.debug(f'get_iiif_metadata: manifestid={manifestid} elapsed={round(now()-start,3)}')
   return metadata

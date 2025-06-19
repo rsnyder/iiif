@@ -73,7 +73,7 @@ def _update_image_service(manifest):
   orientation = ([rec['value'].get('en', rec['value'].get('none'))[0] for rec in manifest.get('metadata', []) if rec['label'].get('en', rec['label'].get('none'))[0] == 'orientation'] or [1])[0]
   orientation = orientation[0] if isinstance(orientation, list) else orientation
   rotation = 0 if orientation == 1 else 90 if orientation == 6 else 180 if orientation == 3 else 270
-  logger.info(f'_update_image_service: width={width} rotation={rotation}')
+  logger.debug(f'_update_image_service: width={width} rotation={rotation}')
   # if width > 512:
   if width > 0:
     image_service = image_data['service'][0]
@@ -86,7 +86,7 @@ def _update_image_service(manifest):
   return manifest
 
 def _manifestid_to_url(manifestid):
-  logger.info(f'_manifestid_to_url: manifestid={manifestid}')
+  logger.debug(f'_manifestid_to_url: manifestid={manifestid}')
   if manifestid.startswith('gh:'):
     return manifestid, gh.manifestid_to_url(manifestid)
   elif manifestid.startswith('wc:') or manifestid.startswith('https://upload.wikimedia.org/wikipedia/commons'):
@@ -134,17 +134,15 @@ async def get_or_create_manifest(request: Request, refresh: Optional[str] = None
   if not manifest:
     manifest = get_manifest(refresh=refresh, **payload)
     manifest_cache[imageid] = json.dumps(manifest)
-  logger.info(f'manifest: url={url} cached={cached} refresh={refresh} elapsed={round(now()-start,3)}')
+  logger.debug(f'manifest: url={url} cached={cached} refresh={refresh} elapsed={round(now()-start,3)}')
   return _update_image_service(manifest)
 
 @app.get('thumbnail/{manifestid:path}')
 async def thumbnail(manifestid: str, url: Optional[str] = None, refresh: Optional[str] = None):
   refresh = refresh in ('', 'true')
-  logger.info(url)
   manifestid, url = url or _manifestid_to_url(manifestid)
-  logger.info(f'thumbnail: url={url}')
   imageid = sha256(url.encode('utf-8')).hexdigest()
-  logger.info(f'thumbnail: imageid={imageid} exists={imageid+".tif" in image_cache}')
+  logger.debug(f'thumbnail: imageid={imageid} exists={imageid+".tif" in image_cache}')
   manifest = json.loads(manifest_cache.get(imageid, '{}')) if not refresh else None
   if not manifest:
     manifest = get_manifest(manifestid=manifestid, refresh=refresh)
@@ -354,7 +352,7 @@ def gh_dirs_el(acct, repo, path, dirs, baseurl='https://iiif.mdpress.io'):
 @app.get('prezi2to3/')
 @app.post('prezi2to3/')
 async def prezi2to3(request: Request, manifest: Optional[str] = None):
-  logger.info(f'prezi2to3: manifest={manifest}')
+  logger.debug(f'prezi2to3: manifest={manifest}')
   if request.method == 'GET':
     m = re.match(r'^(?P<before>.+)(?P<arkIdentifier>ark:\/\w+\/\w+)(?P<after>.+)?', manifest)
     if m:
@@ -387,7 +385,6 @@ async def prezi2to3(request: Request, manifest: Optional[str] = None):
 async def ghdir(path: str, filter: Optional[str] = None):
   acct, repo, *path = path.split('/')
   path = '/'.join(path)
-  logger.info(f'ghdir: acct={acct} repo={repo} path={path} filter={filter}')
   dir_list = gh.gh_dir_list(acct, repo, path)
   if filter == 'images':
     return _images_from_dir_list(dir_list)
@@ -418,7 +415,7 @@ async def gh_token(code: Optional[str] = None, hostname: Optional[str] = None):
         status_code = resp.status_code
         token_obj = resp.json()
         token = token_obj['access_token'] if status_code == 200 else ''
-  logger.info(f'gh_token: code={code} hostname={hostname} token={token}')
+  logger.debug(f'gh_token: code={code} hostname={hostname} token={token}')
   return Response(status_code=status_code, content=token, media_type='text/plain')
 
 def is_browser(user_agent):
@@ -449,7 +446,7 @@ def get_manifest_as_json(manifestid: str, refresh: Optional[str] = None):
     if not manifest:
       manifest = get_manifest(manifestid=manifestid, refresh=refresh)
       manifest_cache[imageid] = json.dumps(manifest)
-    logger.info(f'manifest: manifestid={manifestid} cached={cached} refresh={refresh} elapsed={round(now()-start,3)}')
+    logger.debug(f'manifest: manifestid={manifestid} cached={cached} refresh={refresh} elapsed={round(now()-start,3)}')
     return _update_image_service(manifest)
 
 def get_image_viewer_html(request: Request, manifestid: str):
