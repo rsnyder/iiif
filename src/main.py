@@ -278,7 +278,8 @@ async def _get_image(image_key, transformations: Optional[str] = '') -> Optional
     content_type = resp.get('ContentType', 'application/octet-stream')
 
     # Return as a streaming response (suitable for large files)
-    return StreamingResponse(io.BytesIO(content), media_type=content_type)
+    # return StreamingResponse(io.BytesIO(content), media_type=content_type)
+    return StreamingResponse(io.BytesIO(content), media_type=content_type, headers={'X-Origin': 'Lambda'})
   else:
     try:
       async with httpx.AsyncClient() as client:
