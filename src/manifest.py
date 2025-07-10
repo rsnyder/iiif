@@ -89,7 +89,7 @@ def download(url, url_hash):
       fp.write(resp.content)
   else:
     logger.warning(f'download failed: url={url} code={resp.status_code} msg={resp.text}')
-  logger.debug(f'download: url={url} url_hash={url_hash} elapsed={round(now()-start,3)}')
+  logger.info(f'download: url={url} url_hash={url_hash} elapsed={round(now()-start,3)}')
   return path
 
 def _decimal_coords(coords, ref):

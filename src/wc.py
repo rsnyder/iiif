@@ -131,7 +131,7 @@ def wc_title_to_url(title, width=None):
   elif ext in ('tif', 'tiff'):
     url = f'{baseurl}thumb/{md5[:1]}/{md5[:2]}/{quote(title)}/{width or 1000}px-${quote(title)}.jpg'
   else:
-    url = f'{baseurl}thumb/{md5[:1]}/{md5[:2]}/{quote(title)}/{width or 1000}px-${quote(title)}' if width is not None else f'{baseurl}{md5[:1]}/{md5[:2]}/{title.replace(" ","_")}'
+    url = f'{baseurl}thumb/{md5[:1]}/{md5[:2]}/{quote(title)}/{width or 1000}px-${quote(title)}' if width is not None else f'{baseurl}{md5[:1]}/{md5[:2]}/{quote(title.replace(" ","_"))}'
   return url
 
 def manifestid_to_url(manifestid):
