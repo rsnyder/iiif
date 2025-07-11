@@ -46,11 +46,10 @@ else:
     aws_secret_access_key=os.environ.get('AWS_SECRET_ACCESS_KEY')
   ).client('s3')
 
-cc_licenses = {
+licenses = {
   # Creative Commons Licenses
   'PD': {'label': 'Public Domain', 'url': ''},
   'PUBLIC DOMAIN': {'label': 'Public Domain', 'url': ''},
-  'PUBLIC-DOMAIN': {'label': 'Public Domain', 'url': ''},
   'PDM': {'label': 'Public Domain Mark', 'url': ''},
 
   'CC0': {'label': 'Public Domain Dedication', 'url': 'http://creativecommons.org/publicdomain/zero/1.0/'},
@@ -59,7 +58,21 @@ cc_licenses = {
   'CC-BY-ND': {'label': 'Attribution-NoDerivs', 'url': 'http://creativecommons.org/licenses/by-nd/4.0/'},
   'CC-BY-NC': {'label': 'Attribution-NonCommercial', 'url': 'http://creativecommons.org/licenses/by-nc/4.0/'},
   'CC-BY-NC-SA': {'label': 'Attribution-NonCommercial', 'url': 'http://creativecommons.org/licenses/by-nc-sa/4.0/'},
-  'CC-BY-NC-ND': {'label': 'Attribution-NonCommercial-NoDerivs', 'url': 'http://creativecommons.org/licenses/by-nc-nd/4.0/'}
+  'CC-BY-NC-ND': {'label': 'Attribution-NonCommercial-NoDerivs', 'url': 'http://creativecommons.org/licenses/by-nc-nd/4.0/'},
+
+  # Rights Statements 
+  'InC': {'label': 'IN COPYRIGHT', 'url': 'http://rightsstatements.org/vocab/InC/1.0/'},
+  'InC-OW-EU': {'label': 'IN COPYRIGHT - EU ORPHAN WORK', 'url': 'http://rightsstatements.org/vocab/InC-OW-EU/1.0/'},
+  'InC-EDU': {'label': 'IN COPYRIGHT - EDUCATIONAL USE PERMITTED', 'url': 'http://rightsstatements.org/vocab/InC-EDU/1.0/'},
+  'InC-NC': {'label': 'IN COPYRIGHT - NON-COMMERCIAL USE PERMITTED', 'url': 'http://rightsstatements.org/vocab/InC-NC/1.0/'},
+  'InC-RUU': {'label': 'IN COPYRIGHT - RIGHTS-HOLDER(S) UNLOCATABLE OR UNIDENTIFIABLE', 'url': 'http://rightsstatements.org/vocab/InC-RUU/1.0/'},
+  'NoC-CR': {'label': 'NO COPYRIGHT - CONTRACTUAL RESTRICTIONS', 'url': 'http://rightsstatements.org/vocab/NoC-CR/1.0/'},
+  'NoC-NC': {'label': 'NO COPYRIGHT - NON-COMMERCIAL USE ONLY', 'url': 'http://rightsstatements.org/vocab/NoC-NC/1.0/'},
+  'NoC-OKLR': {'label': 'NO COPYRIGHT - OTHER KNOWN LEGAL RESTRICTIONS', 'url': 'http://rightsstatements.org/vocab/NoC-OKLR/1.0/'},
+  'NoC-US': {'label': 'NO COPYRIGHT - UNITED STATES', 'url': 'http://rightsstatements.org/vocab/NoC-US/1.0/'},
+  'CNE': {'label': 'COPYRIGHT NOT EVALUATED', 'url': 'http://rightsstatements.org/vocab/CNE/1.0/'},
+  'UND': {'label': 'COPYRIGHT UNDETERMINED', 'url': 'http://rightsstatements.org/vocab/UND/1.0/'},
+  'NKC': {'label': 'NO KNOWN COPYRIGHT', 'url': 'http://rightsstatements.org/vocab/NKC/1.0/'}
 }
 
 def exists(key):
@@ -337,49 +350,41 @@ def make_manifest(manifestid, url_hash, image_info, image_metadata, baseurl='htt
 
 def metadata_from_obj(**kwargs):
   kwargs = dict([(k.lower(), v) for k,v in kwargs.items()])
+  
   url = kwargs.get('url')
   lang = kwargs.get('language', 'none')
   label = kwargs['label'] if 'label' in kwargs else kwargs['title'] if 'title' in kwargs else unquote(url.split('/')[-1].split('.')[0]).replace('_',' ')
   summary = kwargs['summary'] if 'summary' in kwargs else kwargs['description'] if 'description' in kwargs else None
-  
-  owner = kwargs['owner'] if 'owner' in kwargs else 'Unspecified'
-  
-  license_code = kwargs['license'].upper() if 'license' in kwargs else None
-  license_url = cc_licenses[license_code]['url'] if license_code in cc_licenses else None
-  license_label = cc_licenses[license_code]['label'] if license_code in cc_licenses else None
+    
+  license = kwargs['license'].upper() if 'license' in kwargs else None
+  license_code = None
+  license_url = None
+  if license:
+    if license.startswith('http'):
+      license_url = license
+      license_code = [pt for pt in license.split('/') if pt != ''][-2].upper()
+      if 'creativecommons' in license_url: license_code = 'CC-' + license_code
+    else:
+      license_code = license
+      license_url = licenses[license_code]['url'] if license_code in licenses else None
   
   metadata = {
     'language': kwargs.get('language', kwargs.get('lang', 'none')),
     'label': label,
-    'metadata': [
-      { 'label': { lang: [ 'title' ] }, 'value': { lang: [ label ] }},
-      { 'label': { lang: [ 'source' ] }, 'value': { lang: [ url ] } }
-    ]
+    'metadata': []
   }
-  if summary:
-    metadata['summary'] = summary
+  if summary: metadata['summary'] = summary
+  if license_url: metadata['rights'] = license_url
+  if 'source' in kwargs:
+    metadata['metadata'].append({ 'label': { lang: [ 'source' ] }, 'value': { lang: [ kwargs['source'] ] } })
 
-  if license_url:
-    metadata['rights'] = license_url
-    
-  if owner:
-    metadata['metadata'].append({
-      'label': { lang: [ 'author' ] }, 
-      'value': { lang: [ owner ] }
-    })
-  
   if 'attribution' in kwargs:
-    attribution_statement = kwargs['attribution']
-  elif owner and license_url and license_code not in ('PD', 'PUBLIC DOMAIN', 'PDM'):
-    attribution_statement = f'Image <em>{label}</em> provided by {owner} under a <a href="{license_url}">{license_label} ({license_code.replace("CC-", "CC ")})</a> license'
-  else:
-    attribution_statement = None
-
-  if attribution_statement:
     metadata['requiredStatement'] = {
       'label': { lang: [ 'attribution' ] },
-      'value': { lang: [ attribution_statement ] }
+      'value': { lang: [ kwargs['attribution'] ] }
     }
+
+  logger.info(json.dumps(metadata, indent=2))
   return metadata
 
 def generate(**kwargs):

@@ -185,7 +185,6 @@ def get_iiif_metadata(**kwargs):
   
   yaml_path = deepcopy(path)
   yaml_path[-1] = '.'.join(path[-1].split('.')[:-1]) + '.yaml'
-  
   gh_metadata = yaml.load(get_gh_file(acct, repo, ref, '/'.join(yaml_path)) or '', Loader=yaml.FullLoader) or {}
   print(json.dumps(gh_metadata, indent=2))
   lang = gh_metadata.get('language', 'en')
@@ -193,11 +192,10 @@ def get_iiif_metadata(**kwargs):
   metadata = {
     'language': lang,
     'label': label,
-    'metadata': [
-      # { 'label': { lang: [ 'author' ] }, 'value': { lang: [ gh_metadata['author'] if 'author' in gh_metadata else f'<a href="{author_url}">{author}</a>' ] }},
-      { 'label': { lang: [ 'source' ] }, 'value': { lang: [ gh_metadata['source'] if 'source' in gh_metadata else f'https://github.com/{acct}/{repo}/blob/{ref}/{"/".join(path)}' ] } }
-    ]
+    'metadata': []
   }
+  if 'source' in gh_metadata:
+    metadata['metadata'] = { 'label': { lang: [ 'source' ] }, 'value': { lang: [ gh_metadata['source'] ] } }
   metadata['rights'] = gh_metadata['rights'] if 'rights' in gh_metadata else license_url
   if 'requiredStatement' in gh_metadata:
     rs_label, rs_value = next(iter(gh_metadata['requiredStatement'].items()))

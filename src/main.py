@@ -127,6 +127,7 @@ async def get_or_create_manifest(request: Request, refresh: Optional[str] = None
   refresh = refresh in ('', 'true')
   payload = await request.body()
   payload = json.loads(payload)
+  _, payload['url'] = _manifestid_to_url(payload['url'])
   url = payload.get('url')
   imageid = sha256(url.encode('utf-8')).hexdigest()
   manifest = json.loads(manifest_cache.get(imageid, '{}')) if not refresh else None
