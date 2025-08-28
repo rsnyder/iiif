@@ -14,7 +14,7 @@ from expiringdict import ExpiringDict
 import boto3
 from botocore.exceptions import ClientError
 
-DEFAULT_BUCKET_NAME = 'mdpress-manifests'
+DEFAULT_BUCKET_NAME = 'juncture-manifests'
 
 class Bucket(object):
     

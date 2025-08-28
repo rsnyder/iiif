@@ -97,7 +97,7 @@ def _get_entity_labels(qids, lang='en'):
     headers = {
       'Content-Type': 'application/x-www-form-urlencoded', 
       'Accept': 'application/sparql-results+json',
-      'User-Agent': 'MDPress Client'
+      'User-Agent': 'Juncture Client'
     }
   )
   return dict([(rec['item']['value'].split('/')[-1],rec['label']['value']) for rec in resp.json()['results']['bindings']]) if resp.status_code == 200 else {}
@@ -109,7 +109,7 @@ def _get_location_data(qid, lang='en'):
     headers = {
       'Content-Type': 'application/x-www-form-urlencoded', 
       'Accept': 'application/sparql-results+json',
-      'User-Agent': 'MDPress Client'
+      'User-Agent': 'Juncture Client'
     }
   )
   label = description = coords = None
@@ -144,7 +144,7 @@ def _get_wd_image_url(qid):
       headers = {
         'Content-Type': 'application/x-www-form-urlencoded', 
         'Accept': 'application/sparql-results+json',
-        'User-Agent': 'MDPress Client'
+        'User-Agent': 'Juncture Client'
       }
     )
     if resp.status_code == 200:

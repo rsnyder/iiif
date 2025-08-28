@@ -36,7 +36,7 @@ logging.getLogger('pyvips').setLevel(logging.ERROR)
 import requests
 logging.getLogger('requests').setLevel(logging.WARNING)
 
-BUCKET_NAME = 'mdpress-images'
+BUCKET_NAME = 'juncture-images'
 
 if 'AWS_LAMBDA_FUNCTION_NAME' in os.environ:
   s3 = boto3.client('s3')
@@ -50,7 +50,7 @@ licenses = {
   # Creative Commons Licenses
   'PD': {'label': 'Public Domain', 'url': ''},
   'PUBLIC DOMAIN': {'label': 'Public Domain', 'url': ''},
-  'PDM': {'label': 'Public Domain Mark', 'url': ''},
+  'PDM': {'label': 'Public Domain Mark', 'url': 'https://creativecommons.org/publicdomain/mark/1.0'},
 
   'CC0': {'label': 'Public Domain Dedication', 'url': 'http://creativecommons.org/publicdomain/zero/1.0/'},
   'CC-BY': {'label': 'Attribution', 'url': 'http://creativecommons.org/licenses/by/4.0/'},
@@ -90,11 +90,11 @@ def download(url, url_hash):
     logger.debug(f'get_gh_file: acct={acct} repo={repo} ref={ref} path={path}')
     gh_metadata = yaml.load(gh.get_gh_file(acct, repo, ref, '/'.join(path)), Loader=yaml.FullLoader)
     url = gh_metadata.get('image_url', url)
-    print(f'GH Metadata: {json.dumps(gh_metadata, indent=2)}')
-    print(f'GH URL: {url}')
+    logger.debug(f'GH Metadata: {json.dumps(gh_metadata, indent=2)}')
+    logger.debug(f'GH URL: {url}')
   resp = requests.get(url, headers={
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36',
-    'Referer': 'https://iiif.mdpress.io/'
+    'Referer': 'https://iiif.juncture.io/'
   }, verify=False)
   if resp.status_code < 400:
     path = f'/tmp/{url_hash}'
@@ -102,7 +102,8 @@ def download(url, url_hash):
       fp.write(resp.content)
   else:
     logger.warning(f'download failed: url={url} code={resp.status_code} msg={resp.text}')
-  logger.info(f'download: url={url} url_hash={url_hash} elapsed={round(now()-start,3)}')
+    path = None
+  logger.debug(f'download: url={url} url_hash={url_hash} elapsed={round(now()-start,3)}')
   return path
 
 def _decimal_coords(coords, ref):
@@ -135,7 +136,7 @@ def av_info(path):
 
 def image_info(url_hash, refresh=False):
   s3_key = f'{url_hash}.json'
-  info = json.loads(s3.get_object(Bucket='mdpress-image-info', Key=s3_key)['Body'].read()) if not refresh and exists(s3_key) else {}
+  info = json.loads(s3.get_object(Bucket='juncture-image-info', Key=s3_key)['Body'].read()) if not refresh and exists(s3_key) else {}
   if info: return info
   try:
     path = f'/tmp/{url_hash}'
@@ -167,7 +168,7 @@ def image_info(url_hash, refresh=False):
     if 'exposure_mode' in _exif and 'exposure_program' in _exif:
       info['mode'] = f"{_exif['exposure_mode']}, {_exif['exposure_program']}"
     # info['size'] = f"{info['width']} x {info['height']} {info['format'].split('/')[-1]}"
-    s3.put_object(Bucket='mdpress-image-info', Key=s3_key, Body=json.dumps(info, indent=2))
+    s3.put_object(Bucket='juncture-image-info', Key=s3_key, Body=json.dumps(info, indent=2))
   except:
     logger.error(traceback.format_exc())
   logger.debug(json.dumps(info, indent=2))
@@ -240,21 +241,22 @@ def get_image_data(**kwargs):
   url_hash = sha256(url.encode('utf-8')).hexdigest()
   
   extension = url.split('.')[-1].lower()
-  _media_info = json.loads(s3.get_object(Bucket='mdpress-image-info', Key=f'{url_hash}.json')['Body'].read()) if not refresh and exists(f'{url_hash}.json') else {}
+  _media_info = json.loads(s3.get_object(Bucket='juncture-image-info', Key=f'{url_hash}.json')['Body'].read()) if not refresh and exists(f'{url_hash}.json') else {}
   if not _media_info:
     path = download(url, url_hash)
-    _type = 'av' if extension in ('mp3', 'mp4', 'webm', 'oga', 'ogg', 'ogv') else 'image'
-    if _type == 'av':
-      _media_info = media_info(path)
-    else:
-      convert(url_hash, **kwargs)
-      _media_info = image_info(url_hash, refresh)
-      os.remove(f'/tmp/{url_hash}')
+    if path:
+      _type = 'av' if extension in ('mp3', 'mp4', 'webm', 'oga', 'ogg', 'ogv') else 'image'
+      if _type == 'av':
+        _media_info = media_info(path)
+      else:
+        convert(url_hash, **kwargs)
+        _media_info = image_info(url_hash, refresh)
+        os.remove(f'/tmp/{url_hash}')
   _media_info['url'] = url
   logger.debug(f'get_image_data: url={url} elapsed={round(now()-start,3)}')
   return _media_info
 
-def make_manifest(manifestid, url_hash, image_info, image_metadata, baseurl='https://iiif.mdpress.io'):
+def make_manifest(manifestid, url_hash, image_info, image_metadata, baseurl='https://iiif.juncture.io'):
   manifestid = manifestid or url_hash
   lang = image_metadata.get('language', 'none')
   manifest = {
@@ -277,13 +279,13 @@ def make_manifest(manifestid, url_hash, image_info, image_metadata, baseurl='htt
           'motivation': 'painting',
           'target': f'{baseurl}/{url_hash}/canvas/p1',
           'body': {
-            'id': image_info['url'],
-            'type': image_info['type'],
-            'format': image_info['format']
+            'id': image_info.get('url', ''),
+            'type': image_info.get('type', ''),
+            'format': image_info.get('format', '')
           }
         }]
       }],
-      'format': image_info['format']
+      'format': image_info.get('format', '')
     }],
     'metadata': []
   }
@@ -291,7 +293,7 @@ def make_manifest(manifestid, url_hash, image_info, image_metadata, baseurl='htt
   canvas = manifest['items'][0]
   annotation = canvas['items'][0]['items'][0]
   annotation_body = annotation['body']
-  _type = image_info.get('type').lower()
+  _type = image_info.get('type', '').lower()
   if _type in ('sound', 'video'):
     if 'duration' in image_info:
       canvas['duration'] = image_info.get('duration')
@@ -384,7 +386,7 @@ def metadata_from_obj(**kwargs):
       'value': { lang: [ kwargs['attribution'] ] }
     }
 
-  logger.info(json.dumps(metadata, indent=2))
+  logger.debug(json.dumps(metadata, indent=2))
   return metadata
 
 def generate(**kwargs):
@@ -428,7 +430,10 @@ def generate(**kwargs):
   
   logger.debug(json.dumps(manifest_data, indent=2))
   
-  manifest = make_manifest(manifestid, url_hash, manifest_data['image-info'], manifest_data['metadata'])
+  if manifest_data['image-info'].get('size') and manifest_data['metadata']:
+    manifest = make_manifest(manifestid, url_hash, manifest_data['image-info'], manifest_data['metadata'])
+  else:
+    manifest = None
   logger.debug(f'generate: manifestid={manifestid} elapsed={round(now()-start,3)}')
   return manifest
 
@@ -439,4 +444,4 @@ if __name__ == '__main__':
   parser.add_argument('--quality', help='Image quality', type=int, default=50)
   parser.add_argument('--refresh', default=False, action='store_true', help='Force refresh if exists')
 
-  print(json.dumps(generate(**vars(parser.parse_args()))))
+  logger.debug(json.dumps(generate(**vars(parser.parse_args()))))

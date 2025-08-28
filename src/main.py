@@ -49,13 +49,15 @@ app.add_middleware(
   allow_credentials=True,
 )
 
-IMAGE_SERVICE_BASEURL = 'https://bxw3h77njs6t5nf7bo2vykqxvi0lzkxb.lambda-url.us-east-1.on.aws'
+## IMAGE_SERVICE_BASEURL = 'https://iiif-image.juncture-digital.io'
+IMAGE_SERVICE_BASEURL = 'https://d399mwta4vjg2n.cloudfront.net'
+
 LOCAL_WC = os.environ.get('LOCAL_WC', 'false').lower() == 'true'
 LOCAL_WC_PORT = os.environ.get('LOCAL_WC_PORT', '5173')
 
 from s3 import Bucket as Cache
-manifest_cache = Cache(bucket='mdpress-manifests')
-image_cache = Cache(bucket='mdpress-images')
+manifest_cache = Cache(bucket='juncture-manifests')
+image_cache = Cache(bucket='juncture-images')
 
 def _find_item(obj, type, attr=None, attr_val=None, sub_attr=None):
   if 'items' in obj and isinstance(obj['items'], list):
@@ -256,9 +258,9 @@ async def _get_image(image_key, transformations: Optional[str] = '') -> Optional
   _, url = _manifestid_to_url(image_key)
   imageid = sha256(url.encode('utf-8')).hexdigest()  
   s3_key =  f'image/{image_key}/{transformations}'
-  iiif_url = f'https://bxw3h77njs6t5nf7bo2vykqxvi0lzkxb.lambda-url.us-east-1.on.aws/iiif/3/{imageid}/full/{size}/0/default.jpg'
+  iiif_url = f'{{IMAGE_SERVICE_BASEURL}}/iiif/3/{imageid}/full/{size}/0/default.jpg'
   
-  print(f'_get_image: image_key={image_key} transformations={transformations} s3_key={s3_key} iiif_url={iiif_url} s3_key_exists={s3_key_exists("juncture-thumbnail-cache", s3_key)}')
+  logger.info(f'_get_image: image_key={image_key} transformations={transformations} s3_key={s3_key} iiif_url={iiif_url} s3_key_exists={s3_key_exists("juncture-thumbnail-cache", s3_key)}')
 
   if s3_key_exists('juncture-thumbnail-cache', s3_key):
     s3_client = boto3.client('s3')
@@ -331,7 +333,7 @@ async def get_image_with_transformations(transformations: str, image_key: str):
 async def get_image_without_transformations(image_key: str):  
   return await _get_image(image_key)
 
-def breadcrumb_el(acct, repo, path, baseurl='https://iiif.mdpress.io'):
+def breadcrumb_el(acct, repo, path, baseurl='https://iiif.juncture.io'):
   el = '<sl-breadcrumb>'
   el += f'<sl-breadcrumb-item>{acct}</sl-breadcrumb-item>'
   el += f'<sl-breadcrumb-item href="{baseurl}/gh:{acct}/{repo}">{repo}</sl-breadcrumb-item>'
@@ -341,7 +343,7 @@ def breadcrumb_el(acct, repo, path, baseurl='https://iiif.mdpress.io'):
   el += '</sl-breadcrumb>'
   return el
 
-def gh_dirs_el(acct, repo, path, dirs, baseurl='https://iiif.mdpress.io'):
+def gh_dirs_el(acct, repo, path, dirs, baseurl='https://iiif.juncture.io'):
   el = '<div class="dirs">'
   for dirname in dirs:
     el += f'<sl-button href="{baseurl}/gh:{acct}/{repo}/{path}{"/" if path else ""}{dirname}" size="small"pill><sl-icon slot="prefix" name="folder"></sl-icon>{dirname}</sl-button>'
@@ -447,9 +449,12 @@ def get_manifest_as_json(manifestid: str, refresh: Optional[str] = None):
     cached = manifest is not None
     if not manifest:
       manifest = get_manifest(manifestid=manifestid, refresh=refresh)
-      manifest_cache[imageid] = json.dumps(manifest)
+      if manifest: manifest_cache[imageid] = json.dumps(manifest)
     logger.debug(f'manifest: manifestid={manifestid} cached={cached} refresh={refresh} elapsed={round(now()-start,3)}')
-    return _update_image_service(manifest)
+    if manifest:
+      return _update_image_service(manifest)
+    else:
+      raise HTTPException(status_code=404, detail='Not found')
 
 def get_image_viewer_html(request: Request, manifestid: str):
   baseurl = str(request.base_url)[:-1]

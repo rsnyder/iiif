@@ -58,8 +58,8 @@ def _extract_text(val, lang='en'):
   
 def _get_wc_metadata(title):
   url = f'https://commons.wikimedia.org/w/api.php?format=json&action=query&titles=File:{quote(title)}&prop=imageinfo&iiprop=extmetadata|size|mime'
-  resp = requests.get(url)
-  logger.debug(f'{url} {resp.status_code}')
+  resp = requests.get(url, headers={'User-agent': 'Juncture client'})
+  logger.info(f'{url} {resp.status_code}')
   if resp.status_code == 200:
     return list(resp.json()['query']['pages'].values())[0]
   
@@ -96,7 +96,7 @@ def _get_entity_labels(qids, lang='en'):
     headers = {
       'Content-Type': 'application/x-www-form-urlencoded', 
       'Accept': 'application/sparql-results+json',
-      'User-Agent': 'MDPress Client'
+      'User-Agent': 'Juncture Client'
     }
   )
   return dict([(rec['item']['value'].split('/')[-1],rec['label']['value']) for rec in resp.json()['results']['bindings']]) if resp.status_code == 200 else {}
@@ -108,7 +108,7 @@ def _get_location_data(qid, lang='en'):
     headers = {
       'Content-Type': 'application/x-www-form-urlencoded', 
       'Accept': 'application/sparql-results+json',
-      'User-Agent': 'MDPress Client'
+      'User-Agent': 'Juncture Client'
     }
   )
   label = description = coords = None
@@ -145,6 +145,7 @@ def get_iiif_metadata(**kwargs):
   dro_qid = None
   props = {}
   props['wc_metadata'] = _get_wc_metadata(title)
+  print(props['wc_metadata'])
   if 'pageid' in props['wc_metadata']:
     props['wc_entity'] = _get_wc_entity(props['wc_metadata']['pageid'])
     dro_qid = _digital_representation_of(props['wc_entity'])

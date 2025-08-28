@@ -25,7 +25,7 @@ def get_gh_file_by_url(url):
   resp = requests.get(url, headers={
     'Authorization': f'Token {GH_UNSCOPED_TOKEN}',
     'Accept': 'application/vnd.github.v3+json',
-    'User-agent': 'MDPress client'
+    'User-agent': 'Juncture client'
   })
   logger.debug(f'get_gh_file_by_url: url={url} resp={resp.status_code}')
   if resp.status_code == 200:
@@ -47,7 +47,7 @@ def get_gh_last_commit(acct, repo, ref, path=None):
   resp = requests.get(url, headers={
     'Authorization': f'Token {GH_UNSCOPED_TOKEN}',
     'Accept': 'application/vnd.github.v3+json',
-    'User-agent': 'MDPress client'
+    'User-agent': 'Juncture client'
   })
   commits = resp.json() if resp.status_code == 200 else []
   last_commit_date = datetime.datetime.strptime(commits[0]['commit']['author']['date'], '%Y-%m-%dT%H:%M:%SZ') if len(commits) > 0 else None
@@ -61,7 +61,7 @@ def gh_dir_list(acct, repo, path=None, ref=None):
   resp = requests.get(url, headers={
     'Authorization': f'Token {GH_UNSCOPED_TOKEN}',
     'Accept': 'application/vnd.github.v3+json',
-    'User-agent': 'MDPress client'
+    'User-agent': 'Juncture client'
   })
   return resp.json() if resp.status_code == 200 else []
 
@@ -71,7 +71,7 @@ def gh_repo_info(acct, repo):
   resp = requests.get(url, headers={
     'Authorization': f'Token {GH_UNSCOPED_TOKEN}',
     'Accept': 'application/vnd.github.v3+json',
-    'User-agent': 'MDPress client'
+    'User-agent': 'Juncture client'
   })
   repo_info = resp.json() if resp.status_code == 200 else {}
   logger.debug(json.dumps(repo_info, indent=2))
@@ -86,7 +86,7 @@ def gh_user_info(login=None, acct=None, repo=None):
   resp = requests.get(url, headers={
     'Authorization': f'Token {GH_UNSCOPED_TOKEN}',
     'Accept': 'application/vnd.github.v3+json',
-    'User-agent': 'MDPress client'
+    'User-agent': 'Juncture client'
   })
   user_info = resp.json() if resp.status_code == 200 else {}
   # logger.debug(json.dumps(user_info, indent=2))
@@ -104,7 +104,7 @@ def get_branches(acct, repo):
   resp = requests.get(url, headers={
     'Authorization': f'Token {GH_UNSCOPED_TOKEN}',
     'Accept': 'application/vnd.github+json',
-    'User-agent': 'MDPress client'
+    'User-agent': 'Juncture client'
   })
   branches = [branch['name'] for branch in resp.json()] if resp.status_code == 200 else []
   return branches
@@ -146,7 +146,7 @@ def get_entity_labels(qids, lang='en'):
     headers = {
       'Content-Type': 'application/x-www-form-urlencoded', 
       'Accept': 'application/sparql-results+json',
-      'User-Agent': 'MDPress Client'
+      'User-Agent': 'Juncture Client'
     }
   )
   return dict([(rec['item']['value'].split('/')[-1],rec['label']['value']) for rec in resp.json()['results']['bindings']]) if resp.status_code == 200 else {}
@@ -186,7 +186,7 @@ def get_iiif_metadata(**kwargs):
   yaml_path = deepcopy(path)
   yaml_path[-1] = '.'.join(path[-1].split('.')[:-1]) + '.yaml'
   gh_metadata = yaml.load(get_gh_file(acct, repo, ref, '/'.join(yaml_path)) or '', Loader=yaml.FullLoader) or {}
-  print(json.dumps(gh_metadata, indent=2))
+  logger.debug(json.dumps(gh_metadata, indent=2))
   lang = gh_metadata.get('language', 'en')
   
   metadata = {
@@ -195,7 +195,7 @@ def get_iiif_metadata(**kwargs):
     'metadata': []
   }
   if 'source' in gh_metadata:
-    metadata['metadata'] = { 'label': { lang: [ 'source' ] }, 'value': { lang: [ gh_metadata['source'] ] } }
+    metadata['metadata'].append({ 'label': { lang: [ 'source' ] }, 'value': { lang: [ gh_metadata['source'] ] } })
   metadata['rights'] = gh_metadata['rights'] if 'rights' in gh_metadata else license_url
   if 'requiredStatement' in gh_metadata:
     rs_label, rs_value = next(iter(gh_metadata['requiredStatement'].items()))

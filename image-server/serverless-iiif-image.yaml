@@ -1,0 +1,130 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Serverless IIIF Image Service behind CloudFront at a custom domain (Squarespace DNS)
+
+Parameters:
+  DomainName:
+    Type: String
+    Description: Full hostname for the service (e.g., iiif-image.juncture-digital.io)
+  CertificateArn:
+    Type: String
+    Description: ACM cert ARN in us-east-1 for iiif-image.juncture-digital.io (or *.juncture-digital.io)
+  SourceBucket:
+    Type: String
+    Description: S3 bucket containing source images
+  SharpLayer:
+    Type: String
+    Default: JP2
+    AllowedPattern: '^INTERNAL$|^JP2$|^arn:aws:lambda:.*:.*:layer:.+:\\d+$'
+    Description: INTERNAL for built-ins, JP2 for managed JPEG2000 layer, or a custom layer ARN
+  IiifLambdaMemory:
+    Type: Number
+    Default: 3008
+  IiifLambdaTimeout:
+    Type: Number
+    Default: 10
+  ForceHost:
+    Type: String
+    Default: ''
+    Description: Optional forced hostname in IIIF responses (leave blank to skip)
+
+  # Optional logging
+  EnableLogging:
+    Type: String
+    AllowedValues: ['true','false']
+    Default: 'false'
+    Description: Enable CloudFront access logs to S3
+  LogBucketDomainName:
+    Type: String
+    Default: ''
+    Description: S3 bucket domain name for logs (e.g., my-logs-bucket.s3.amazonaws.com)
+  LogPrefix:
+    Type: String
+    Default: iiif-image/
+
+Resources:
+  # Serverless IIIF Lambda (via SAR)
+  ServerlessIiif:
+    Type: AWS::Serverless::Application
+    Properties:
+      Location:
+        ApplicationId: arn:aws:serverlessrepo:us-east-1:625046682746:applications/serverless-iiif
+        SemanticVersion: 5.1.7
+      Parameters:
+        SourceBucket: !Ref SourceBucket
+        SharpLayer: !Ref SharpLayer
+        IiifLambdaMemory: !Ref IiifLambdaMemory
+        IiifLambdaTimeout: !Ref IiifLambdaTimeout
+        ForceHost: !Ref ForceHost
+
+  ResponseHeaderPolicy:
+    Type: AWS::CloudFront::ResponseHeadersPolicy
+    Properties:
+      ResponseHeadersPolicyConfig:
+        Name: !Sub "${AWS::StackName}-allow-cors"
+        Comment: Allows IIIF CORS response headers
+        CorsConfig:
+          AccessControlAllowCredentials: false
+          AccessControlAllowHeaders: { Items: ["*"] }
+          AccessControlAllowMethods: { Items: ["GET","OPTIONS","HEAD"] }
+          AccessControlAllowOrigins: { Items: ["*"] }
+          AccessControlExposeHeaders:
+            Items: ["cache-control","content-language","content-length","content-type",
+                    "date","expires","last-modified","pragma"]
+          AccessControlMaxAgeSec: 3600
+          OriginOverride: false
+
+  OriginRequestPolicy:
+    Type: AWS::CloudFront::OriginRequestPolicy
+    Properties:
+      OriginRequestPolicyConfig:
+        Name: !Sub "${AWS::StackName}-iiif-origin"
+        CookiesConfig: { CookieBehavior: none }
+        QueryStringsConfig: { QueryStringBehavior: all }
+        HeadersConfig:
+          HeaderBehavior: whitelist
+          Headers: [ "Accept" ]
+
+  Distribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        Comment: !Sub "IIIF @ ${DomainName}"
+        Aliases: [ !Ref DomainName ]
+        HttpVersion: http2and3
+        PriceClass: PriceClass_100
+        ViewerCertificate:
+          AcmCertificateArn: !Ref CertificateArn
+          SslSupportMethod: sni-only
+          MinimumProtocolVersion: TLSv1.2_2021
+        Origins:
+          - Id: IiifLambda
+            DomainName: !GetAtt ServerlessIiif.Outputs.FunctionDomain
+            CustomOriginConfig:
+              OriginProtocolPolicy: https-only
+        DefaultCacheBehavior:
+          TargetOriginId: IiifLambda
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods: ["GET","HEAD","OPTIONS"]
+          CachedMethods: ["GET","HEAD"]
+          CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6
+          OriginRequestPolicyId: !Ref OriginRequestPolicy
+          ResponseHeadersPolicyId: !Ref ResponseHeaderPolicy
+        Logging:
+          !If
+            - EnableLogs
+            - { Bucket: !Ref LogBucketDomainName, IncludeCookies: false, Prefix: !Ref LogPrefix }
+            - { Ref: "AWS::NoValue" }
+
+Conditions:
+  EnableLogs: !Equals [ !Ref EnableLogging, 'true' ]
+
+Outputs:
+  CloudFrontDomainName:
+    Description: Use this as the CNAME target in Squarespace (iiif-image → this value)
+    Value: !GetAtt Distribution.DomainName
+  IiifV2Endpoint:
+    Value: !Sub "https://${DomainName}/iiif/2"
+  IiifV3Endpoint:
+    Value: !Sub "https://${DomainName}/iiif/3"
