@@ -49,6 +49,15 @@ aws s3 cp test.tif s3://juncture-images/
 
 ### 2. Deploy the CloudFormation stack
 
+Get the cert arn
+
+```bash
+aws acm list-certificates \
+  --region us-east-1 \
+  --query "CertificateSummaryList[?DomainName=='iiif-image.juncture-digital.io' || DomainName=='*.juncture-digital.io'].CertificateArn" \
+  --output text
+```
+
 Use the provided template (serverless-iiif-image.yaml) that:
 - Installs the Serverless IIIF Lambda via the AWS Serverless Application Repository (SAR)
 - Creates a CloudFront distribution with custom domain support
