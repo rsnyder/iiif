@@ -238,7 +238,7 @@ def get_image_data(**kwargs):
   start = now()
   refresh = kwargs.get('refresh', False)
   url = kwargs['url']
-  url_hash = sha256(url.encode('utf-8')).hexdigest()
+  url_hash = sha256(unquote(url).encode('utf-8')).hexdigest()
   
   extension = url.split('.')[-1].lower()
   _media_info = json.loads(s3.get_object(Bucket='juncture-image-info', Key=f'{url_hash}.json')['Body'].read()) if not refresh and exists(f'{url_hash}.json') else {}
@@ -402,7 +402,6 @@ def generate(**kwargs):
     if manifestid.startswith('gh:'):
       url = gh.manifestid_to_url(manifestid)
       metadata_fn = gh.get_iiif_metadata
-    
     elif manifestid.startswith('wc:'):
       url = wc.manifestid_to_url(manifestid)
       metadata_fn = wc.get_iiif_metadata
@@ -412,8 +411,9 @@ def generate(**kwargs):
       metadata_fn = wd.get_iiif_metadata
 
   if metadata_fn:
-    url_hash = sha256(url.encode('utf-8')).hexdigest()
+    url_hash = sha256(unquote(url).encode('utf-8')).hexdigest()
     kwargs['url'] = url
+    logger.info(f'url={url} url_hash={url_hash} manifestid={manifestid}')
 
     manifest_data = {}
     with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
