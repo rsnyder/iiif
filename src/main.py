@@ -448,7 +448,7 @@ def _s3_get_object_bytes(bucket: str, key: str) -> Optional[Tuple[bytes, str]]:
 # Main
 # ----------------------------
 
-async def _get_image(image_key, transformations: Optional[str] = ""):
+async def _get_image(image_key, transformations: Optional[str] = "", refresh: bool = False):
     """
     Cloudinary-ish transformations backed by IIIF:
       - w_### and/or h_###
@@ -458,6 +458,9 @@ async def _get_image(image_key, transformations: Optional[str] = ""):
     Caches the *result* in S3 keyed by (image_key, canonical_transformations).
 
     Returns a FastAPI Response (StreamingResponse or RedirectResponse).
+    refresh:
+      - False (default): use S3 cached rendition if present
+      - True: bypass S3 cache read and regenerate; updates S3 cache
     """
     params = _parse_transformations(transformations or "")
 
@@ -474,26 +477,33 @@ async def _get_image(image_key, transformations: Optional[str] = ""):
         params["c"] = "fit"
         c = "fit"
 
-    # Canonicalize to avoid cache misses due to param order
     canonical = _canonical_transformations(params)
 
-    # Build IDs / keys
     _, url = _manifestid_to_url(image_key)
     imageid = sha256(url.encode("utf-8")).hexdigest()
     s3_key = f"image/{image_key}/{canonical}"
 
-    # Cache read (one call)
-    cached = _s3_get_object_bytes(THUMB_BUCKET, s3_key)
-    if cached is not None:
-        content, content_type = cached
+    # Cache read (one call) — bypass if refresh
+    if not refresh:
+        cached = _s3_get_object_bytes(THUMB_BUCKET, s3_key)
+        if cached is not None:
+            content, content_type = cached
+            logger.info(
+                f"_get_image cache-hit: image_key={image_key} transformations={canonical} s3_key={s3_key}"
+            )
+            return StreamingResponse(
+                io.BytesIO(content),
+                media_type=content_type,
+                headers={"X-Origin": "S3"},
+            )
+    else:
         logger.info(
-            f"_get_image cache-hit: image_key={image_key} transformations={canonical} s3_key={s3_key}"
+            f"_get_image refresh requested: bypassing cache for image_key={image_key} transformations={canonical} s3_key={s3_key}"
         )
-        return StreamingResponse(
-            io.BytesIO(content),
-            media_type=content_type,
-            headers={"X-Origin": "S3"},
-        )
+        # Optional but often useful: proactively delete the cached object to avoid stale reads
+        # if other callers hit the old value during regeneration.
+        # Uncomment if you have a delete helper:
+        # _s3_delete_object(THUMB_BUCKET, s3_key)
 
     gravity_key = (params.get("g") or "center").strip().lower()
     gravity = GRAVITY.get(gravity_key, GRAVITY["center"])
@@ -534,7 +544,7 @@ async def _get_image(image_key, transformations: Optional[str] = ""):
         iiif_url = f"{IMAGE_SERVICE_BASEURL}/iiif/3/{imageid}/{region}/{size_str}/0/default.jpg"
 
         logger.info(
-            f"_get_image cache-miss: image_key={image_key} transformations={canonical} "
+            f"_get_image cache-miss{'(refresh)' if refresh else ''}: image_key={image_key} transformations={canonical} "
             f"s3_key={s3_key} iiif_url={iiif_url}"
         )
 
@@ -553,7 +563,7 @@ async def _get_image(image_key, transformations: Optional[str] = ""):
                 image_bytes=image_bytes,
                 content_type="image/jpeg",
             )
-            # Keep your prior behavior: redirect client to IIIF result
+            # Still redirect as before (client fetches IIIF directly)
             return RedirectResponse(url=iiif_url)
 
         # Fallback: fetch original image and transform locally
